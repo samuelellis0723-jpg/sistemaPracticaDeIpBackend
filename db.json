@@ -1,0 +1,12 @@
+{
+  "pedidos": [
+    {"id":"P001","cliente":"Ana","ip":"190.10.0.1","items":[{"nombre":"Teclado","cantidad":1,"precio":18000,"pesoKg":1}],"estado":"pendiente"},
+    {"id":"P002","cliente":"Luis","ip":"201.192.0.1","items":[{"nombre":"Monitor","cantidad":1,"precio":42000,"pesoKg":7}],"estado":"pendiente"},
+    {"id":"P003","cliente":"Sofía","ip":"8.8.8.8","items":[{"nombre":"Mouse","cantidad":2,"precio":12000,"pesoKg":0.5}],"estado":"pendiente"},
+    {"id":"P004","cliente":"Mario","ip":"192.168.1.10","items":[{"nombre":"Cable","cantidad":2,"precio":3000,"pesoKg":0.2}],"estado":"pendiente"},
+    {"id":"P005","cliente":"Elena","ip":"","items":[{"nombre":"Silla","cantidad":1,"precio":55000,"pesoKg":8}],"estado":"pendiente"},
+    {"id":"P006","cliente":"Carlos","ip":"190.10.0.1","items":[{"nombre":"Libro","cantidad":3,"precio":20000,"pesoKg":2}],"estado":"aprobado","costoEnvio":0,"zona":"GAM"},
+    {"id":"P007","cliente":"Julia","ip":"201.192.0.1","items":[{"nombre":"Arroz","cantidad":1,"precio":5000,"pesoKg":4}],"estado":"pendiente"},
+    {"id":"P008","cliente":"Datos incompletos","ip":"190.10.0.1","items":[{"nombre":"Taza","cantidad":0,"precio":2500,"pesoKg":0.4}],"estado":"pendiente"}
+  ]
+}
