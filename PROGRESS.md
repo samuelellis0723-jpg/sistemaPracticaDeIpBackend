@@ -312,3 +312,53 @@ Pendiente (no simulado): respuestas reales de API, petición 404 de JSON Server 
 - La consulta de cobertura ahora adjunta ciudad, región, país/código, coordenadas, IP y fuente(s) disponibles a la decisión. Prefiere región de IP-API para mantener la regla de zonas; completa los otros campos con la respuesta de ipinfo si faltan.
 - El mensaje final incluye esos datos y aclara que se trata de ubicación estimada por IP, no de dirección física exacta.
 - Verificación sintética añadida al simulador: comprueba ciudad, Heredia, Costa Rica, latitud/longitud y ambas fuentes en la salida final; no ejecuta APIs reales.
+
+## Reto 1 — Jerarquía polimórfica de fuentes geográficas
+
+### H1 — Inspección y línea base (antes de editar)
+- Revisados `clases.js`, `main.js`, `nodo-code.js`, `simular-nodo-code.js`, `workflow-n8n.json`, `README.md` y `PROGRESS.md`.
+- Ejecución inicial observada: `node main.js` → 21/21; `node simular-nodo-code.js` → 44/44. El conteo observado del simulador es 44, aunque una descripción anterior mencionaba 39.
+- Ambos programas usan datos sintéticos en memoria; no se hicieron llamadas a las APIs ni se ejecutó n8n.
+
+### H2–H4 — Diseño e integración
+- Agregada `FuenteGeografica.normalizarRespuesta()` como método base, y overrides reales en `FuenteIpApi` e `FuenteIpInfo`.
+- `normalizarFuenteGeografica(fuente, respuesta)` valida que la instancia pertenezca a la clase base y llama el método sobrescrito sin ramificar por proveedor.
+- Ambas hijas producen `Ubicacion`; el parser de ipinfo convierte `loc` a `lat` y `lon`. Los métodos estáticos previos de `Ubicacion` siguen funcionando como delegados.
+- `main.js` usa las nuevas instancias para fixtures de IP-API/IPinfo. `nodo-code.js` instancia las dos clases y las pasa a la función polimórfica. El nodo `Evaluar pedido` del workflow se sincronizó desde ese archivo.
+- `PoliticaEnvio`, sus reglas, configuración, tarifas, códigos y cuerpos de persistencia no se modificaron.
+
+### H5–H6 — Pruebas y resultado real
+- `node main.js` después del cambio → 28/28. Incluye normalización de ambas fuentes, herencia/despacho por clase base, respuesta mal formada, `status: fail`, IP distinta y comparación de decisiones vía compatibilidad estática y jerarquía.
+- `node simular-nodo-code.js` después del cambio → 44/44. Mantiene escenarios de pedido, fallback, cobertura, errores, PATCH simulado, salida de consulta IP y equivalencia del workflow.
+- Comparación literal del prefijo de `nodo-code.js` con `clases.js` → IGUALES (12910/12910 caracteres). El Code de `workflow-n8n.json` coincide con `nodo-code.js`.
+
+### H7–H8 — Documentación y revisión adversarial
+- README documenta la jerarquía, contrato normalizado, compatibilidad y el rol de la política.
+- Auditoría: hay dos `extends`, ambas hijas sobrescriben `normalizarRespuesta`, el invocador recibe `FuenteGeografica`, cada parser respeta su estructura, los adaptadores y pruebas usan las clases, y las reglas de negocio permanecen centralizadas en `PoliticaEnvio`.
+- Errores existentes de parseo (`GEO_FALLIDA`, `IP_INVALIDA`, `IP_PRIVADA_O_RESERVADA`) se conservan. La IP retornada diferente se rechaza en la verificación existente de `PoliticaEnvio` con `GEO_FALLIDA`.
+- Limitación: la validación se hizo con respuestas sintéticas; no se confirmó la salida real de proveedores, n8n o JSON Server en esta sesión.
+
+## Reto 2 — Ramas geográficas y Merge
+
+### H1 — Línea base y revisión previa
+- Revisados `workflow-n8n.json`, `WORKFLOW_SETUP.md`, `nodo-code.js`, `clases.js`, `simular-nodo-code.js`, `README.md` y `PROGRESS.md` antes de editar.
+- Ejecución inicial de esta tarea: `node main.js` → 28/28; `node simular-nodo-code.js` → 44/44. Los casos del simulador son sintéticos.
+- La topología encontrada tenía IP-API seguida de IPinfo; las consultas no estaban en paralelo ni había Merge.
+
+### H2 — Versiones/esquema
+- n8n y `n8n-nodes-base` no están instalados en el workspace, y no se conoce la versión de la instancia destino; por eso no se puede probar una importación local.
+- El export usa HTTP Request 4.2, IF 2.2 y Code 2. Se eligió Merge 3.2, con parámetros documentados `mode: "combine"`, `combineBy: "combineByPosition"`, `options: {}`. Verificadas las opciones con la [documentación oficial de Merge](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.merge/) y el [esquema fuente oficial de Merge v3](https://github.com/n8n-io/n8n/blob/master/packages/nodes-base/nodes/Merge/v3/actions/versionDescription.ts). La compatibilidad de importación con la instancia destino sigue pendiente.
+
+### H3–H5 — Ramas, etiquetado, combinación y Code
+- La salida true de `¿Hay IP?` conecta directamente con IP-API e IPinfo; ambas URL leen la IP de `Preparar pedido`.
+- Cada salida HTTP llega a un Code etiquetador que conserva el `$json` completo bajo `geo_ipapi` o `geo_ipinfo`. Luego Merge empareja por posición los dos items; las claves únicas evitan que `country`, `city` u otros nombres coincidentes se sobrescriban.
+- La salida de Merge va a `Evaluar pedido`. El Code obtiene pedido y errores por nombre desde `AI Agent`, las dos respuestas desde `$json` del Merge, normaliza con `FuenteIpApi`/`FuenteIpInfo` mediante `normalizarFuenteGeografica` y mantiene `PoliticaEnvio.evaluar` como autoridad. La rama sin IP mantiene su ruta directa al evaluador.
+- Los HTTP Request conservan `Never Error`, status completo y `onError: continueRegularOutput`; las etiquetas convierten cada salida de rama a la forma requerida para Merge incluso si continúa como item de error/entrada.
+
+### H6–H9 — Documentación, pruebas y límites
+- Actualizados `workflow-n8n.json`, `nodo-code.js`, `simular-nodo-code.js`, `WORKFLOW_SETUP.md`, README y este archivo. El AI Agent sigue conectado al modelo DeepSeek nativo; no tiene `ai_tool` ni memoria.
+- El simulador cubre ambas APIs coincidentes/discrepantes, fallback HTTP por cada fuente, dos HTTP 429, respuestas con campos iguales, fuente HTTP fallida, JSON del agente inválido, 404/200 de PATCH sintético y la estructura paralela/Merge.
+- Verificación ejecutada tras los cambios: `node main.js` → 28/28; `node simular-nodo-code.js` → 47/47. El simulador también verifica ramas, Merge anterior a evaluación, nombres de campos, IP compartida, DeepSeek sin tools, persistencia y salida del Chat Trigger.
+- `node --check` en `clases.js`, `main.js`, `nodo-code.js` y `simular-nodo-code.js` pasó. El JSON parsea, las referencias de conexiones apuntan a nodos existentes, los Code nodes compilan, el prefijo de clases es idéntico (12.910 caracteres) y el evaluador en el workflow coincide con `nodo-code.js`.
+- Pendiente ejecutar en la versión n8n del estudiante para confirmar importación y comportamiento real de `continueRegularOutput` al alimentar Merge. No se hicieron solicitudes reales a IP-API/IPinfo ni a JSON Server.
+- No se recibió indicación de que el docente prohíba nodos extra. Si lo exige, la variante sin Merge quedaría documentada como alternativa, pero no cumpliría Reto 2.

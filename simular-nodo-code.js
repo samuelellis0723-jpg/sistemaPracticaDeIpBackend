@@ -23,7 +23,7 @@ function ejecutar(nodos) {
       return [{ json: nodos[nombre] }];
     }
   });
-  return vm.runInNewContext(`(function () {\n${fuente}\n})()`, { $: acceso }, { timeout: 1000 });
+  return vm.runInNewContext(`(function () {\n${fuente}\n})()`, { $: acceso, $json: nodos.$json || {} }, { timeout: 1000 });
 }
 
 function ejecutarRespuestaFinal(decision, parche) {
@@ -41,7 +41,12 @@ const ipapi = (region = 'Heredia', codigo = 'CR', pais = codigo === 'CR' ? 'Cost
 const ipinfo = (region = 'Heredia', country = 'CR') => ({ ip: IP_PRUEBA, city: 'Ciudad de prueba', region, country, loc: '9.9,-84' });
 const pedido = (id = 'T1', precio = 10000, peso = 1, estado = 'pendiente') => ({ id, cliente: 'Cliente de prueba', ip: IP_PRUEBA, items: [{ nombre: 'Artículo de prueba', cantidad: 1, precio, pesoKg: peso }], estado });
 const agente = (p = pedido(), errores = [], modo = 'pedido') => ({ output: JSON.stringify({ modo, pedido: p, errores }) });
-const escenario = (p = pedido(), a = ipapi(), b = ipinfo(), errores) => ({ 'AI Agent': agente(p, errores), 'IP-API': a, IPinfo: b });
+function ejecutarEtiqueta(nombreNodo, respuesta) {
+  const js = workflow.nodes.find(n => n.name === nombreNodo).parameters.jsCode;
+  return vm.runInNewContext(`(function(){${js}\n})()`, { $json: respuesta }, { timeout: 1000 }).json;
+}
+const etiquetarYFusionar = (a, b) => ({ ...ejecutarEtiqueta('Etiquetar IP-API', a), ...ejecutarEtiqueta('Etiquetar IPinfo', b) });
+const escenario = (p = pedido(), a = ipapi(), b = ipinfo(), errores) => ({ 'AI Agent': agente(p, errores), $json: etiquetarYFusionar(a, b) });
 const escenarios = [];
 function agregar(nombre, nodos, esperado, comprobar = r => r.codigo) { escenarios.push({ nombre, nodos, esperado, comprobar }); }
 
@@ -59,34 +64,36 @@ agregar('Solo IP-API disponible', escenario(pedido('T10'), ipapi(), null), 'apro
 agregar('Solo IPinfo disponible', escenario(pedido('T11'), null, ipinfo()), 'aprobado', r => r.estado);
 agregar('HTTP 503 en IP-API permite respaldo', escenario(pedido('T12'), { statusCode: 503, body: { mensaje: 'error sintético' } }, ipinfo()), 'aprobado', r => r.estado);
 agregar('HTTP 429 en IP-API permite respaldo', escenario(pedido('T13'), { statusCode: 429, body: { message: 'rate limit sintético' } }, ipinfo()), 'aprobado', r => r.estado);
+agregar('HTTP 503 en IPinfo permite respaldo de IP-API', escenario(pedido('T13B'), ipapi(), { statusCode: 503, body: { error: 'error sintético' } }), 'aprobado', r => r.estado);
 agregar('Ambas APIs caídas', escenario(pedido('T14'), null, null), 'GEO_FALLIDA');
 agregar('Ambas APIs responden HTTP 429', escenario(pedido('T15'), { statusCode: 429, body: {} }, { statusCode: 429, body: {} }), 'GEO_FALLIDA');
 agregar('IP de IP-API no coincide con pedido', escenario(pedido('T16'), { ...ipapi(), query: '198.51.100.5' }, null), 'GEO_FALLIDA');
 agregar('IP de IPinfo no coincide con pedido', escenario(pedido('T17'), null, { ...ipinfo(), ip: '198.51.100.8' }), 'GEO_FALLIDA');
 agregar('Las APIs devuelven IPs distintas', escenario(pedido('T18'), ipapi(), { ...ipinfo(), ip: '198.51.100.8' }), 'GEO_INCONSISTENTE');
 agregar('Pedido ya procesado', escenario(pedido('T19', 10000, 1, 'aprobado')), 'PEDIDO_YA_PROCESADO');
-agregar('JSON del agente inválido', { 'AI Agent': { output: '{ pedido:' }, 'IP-API': null, IPinfo: null }, 'ERROR_INTERNO');
-agregar('Salida del agente vacía', { 'AI Agent': { output: '  ' }, 'IP-API': null, IPinfo: null }, 'ERROR_INTERNO');
-agregar('AI Agent null', { 'AI Agent': null, 'IP-API': null, IPinfo: null }, 'ERROR_INTERNO');
-agregar('AI Agent devuelve array', { 'AI Agent': { output: '[]' }, 'IP-API': null, IPinfo: null }, 'ERROR_INTERNO');
-agregar('Falta objeto pedido', { 'AI Agent': { output: JSON.stringify({ errores: [] }) }, 'IP-API': null, IPinfo: null }, 'ERROR_INTERNO');
+agregar('JSON del agente inválido', { 'AI Agent': { output: '{ pedido:' }, $json: {} }, 'ERROR_INTERNO');
+agregar('Salida del agente vacía', { 'AI Agent': { output: '  ' }, $json: {} }, 'ERROR_INTERNO');
+agregar('AI Agent null', { 'AI Agent': null, $json: {} }, 'ERROR_INTERNO');
+agregar('AI Agent devuelve array', { 'AI Agent': { output: '[]' }, $json: {} }, 'ERROR_INTERNO');
+agregar('Falta objeto pedido', { 'AI Agent': { output: JSON.stringify({ errores: [] }) }, $json: {} }, 'ERROR_INTERNO');
 agregar('Campos faltantes del pedido', escenario({ id: 'T20', cliente: 'Ana', ip: IP_PRUEBA, items: [] }), 'DATOS_INCOMPLETOS');
-agregar('Campo errores ausente se tolera', { 'AI Agent': { output: JSON.stringify({ pedido: pedido('T21') }) }, 'IP-API': ipapi(), IPinfo: ipinfo() }, 'aprobado', r => r.estado);
+agregar('Campo errores ausente se tolera', { 'AI Agent': { output: JSON.stringify({ pedido: pedido('T21') }) }, $json: etiquetarYFusionar(ipapi(), ipinfo()) }, 'aprobado', r => r.estado);
 agregar('Campo errores mal formado se tolera', escenario(pedido('T22'), ipapi(), ipinfo(), 'error'), 'aprobado', r => r.estado);
 agregar('IP-API wrapper HTTP con body JSON', escenario(pedido('T23'), { statusCode: 200, body: JSON.stringify(ipapi()) }, null), 'aprobado', r => r.estado);
 agregar('IPinfo wrapper HTTP válido', escenario(pedido('T24'), null, { statusCode: 200, body: ipinfo() }), 'aprobado', r => r.estado);
 agregar('Respuesta de API como array', escenario(pedido('T25'), [], null), 'GEO_FALLIDA');
 agregar('Body JSON mal formado usa respaldo', escenario(pedido('T26'), { statusCode: 200, body: '{ roto' }, ipinfo()), 'aprobado', r => r.estado);
-agregar('IPinfo directo como objeto', { 'AI Agent': { output: { pedido: pedido('T27'), errores: [] } }, 'IP-API': null, IPinfo: ipinfo() }, 'aprobado', r => r.estado);
+agregar('IPinfo directo como objeto', { 'AI Agent': { output: { pedido: pedido('T27'), errores: [] } }, $json: etiquetarYFusionar(null, ipinfo()) }, 'aprobado', r => r.estado);
 agregar('ID numérico preservado y persistible', escenario(pedido(101)), true, r => r.pedidoId === 101 && r.persistir);
 agregar('ID string preservado y persistible', escenario(pedido('001')), '001', r => r.persistir && r.pedidoId);
 agregar('Sin ID válido no se debe persistir', escenario(pedido(null)), false, r => r.persistir);
 agregar('Error HTTP conserva estado y solo intenta log técnico', escenario(pedido('T28'), { statusCode: 429, body: {} }, null), true, r => r.estado === 'pendiente' && r.persistir && !Object.hasOwn(r.cuerpoPatch, 'estado'));
 const consultaIp = ip => ({ ip });
-agregar('Consulta IP sola dentro de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi(), IPinfo: ipinfo() }, true, r => r.tipoResultado === 'consulta_cobertura' && r.aprobado && r.codigo === 'COBERTURA_DISPONIBLE' && r.zona && !r.persistir && r.cuerpoPatch === null && r.pedidoId === null);
-agregar('Consulta IP sola fuera de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi('Zona desconocida'), IPinfo: ipinfo('Zona desconocida') }, 'FUERA_DE_COBERTURA', r => r.codigo);
-agregar('Consulta IP sola sin datos geograficos no afirma cobertura', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': null, IPinfo: null }, true, r => !r.aprobado && r.codigo === 'GEO_FALLIDA' && !r.persistir);
-agregar('Consulta de cobertura sin IP solicita el dato', { 'AI Agent': agente({}, [], 'consulta_cobertura'), 'IP-API': null, IPinfo: null }, 'DATOS_INCOMPLETOS', r => r.codigo);
+agregar('Consulta IP sola dentro de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), $json: etiquetarYFusionar(ipapi(), ipinfo()) }, true, r => r.tipoResultado === 'consulta_cobertura' && r.aprobado && r.codigo === 'COBERTURA_DISPONIBLE' && r.zona && !r.persistir && r.cuerpoPatch === null && r.pedidoId === null);
+agregar('Consulta IP sola fuera de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), $json: etiquetarYFusionar(ipapi('Zona desconocida'), ipinfo('Zona desconocida')) }, 'FUERA_DE_COBERTURA', r => r.codigo);
+agregar('Consulta IP sola sin datos geograficos no afirma cobertura', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), $json: etiquetarYFusionar(null, null) }, true, r => !r.aprobado && r.codigo === 'GEO_FALLIDA' && !r.persistir);
+agregar('Consulta de cobertura sin IP solicita el dato', { 'AI Agent': agente({}, [], 'consulta_cobertura'), $json: {} }, 'DATOS_INCOMPLETOS', r => r.codigo);
+agregar('Merge conserva campos coincidentes bajo etiquetas separadas', escenario(), true, () => { const m = etiquetarYFusionar({ ...ipapi(), city: 'Ciudad IP-API' }, { ...ipinfo(), city: 'Ciudad ipinfo' }); return m.geo_ipapi.country === 'Costa Rica' && m.geo_ipinfo.country === 'CR' && m.geo_ipapi.city === 'Ciudad IP-API' && m.geo_ipinfo.city === 'Ciudad ipinfo'; });
 
 let pasaron = 0;
 const camposSalida = ['pedidoId', 'aprobado', 'estado', 'zona', 'costoEnvio', 'total', 'codigo', 'motivo', 'detalleTecnico', 'cuerpoPatch', 'persistir'];
@@ -108,15 +115,32 @@ console.log(`[SIMULADO] PATCH HTTP 404: esperado=PEDIDO_NO_ENCONTRADO; obtenido=
 const respuestaPatchOk = ejecutarRespuestaFinal(ejecutar(escenario()).json, { statusCode: 200, body: {} })[0];
 const casoPatchOk = respuestaPatchOk.json.persistido === true;
 console.log(`[SIMULADO] PATCH HTTP 200: esperado=persistido; obtenido=${respuestaPatchOk.json.persistido}; ${casoPatchOk ? 'OK' : 'FALLA'}`);
-const respuestaConsulta = ejecutarRespuestaFinal(ejecutar({ 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi(), IPinfo: ipinfo() }).json)[0];
+const respuestaConsulta = ejecutarRespuestaFinal(ejecutar({ 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), $json: etiquetarYFusionar(ipapi(), ipinfo()) }).json)[0];
 const textoConsulta = respuestaConsulta.json.output;
 const casoConsultaOk = textoConsulta.includes('SI, esta dentro') && textoConsulta.includes('Ciudad: Ciudad de prueba') && textoConsulta.includes('Region/estado: Heredia') && textoConsulta.includes('Pais: Costa Rica (CR)') && textoConsulta.includes('Coordenadas: 9.9, -84') && textoConsulta.includes('Fuente: ip-api e ipinfo') && respuestaConsulta.json.persistido === undefined;
 console.log(`[SIMULADO] Respuesta del chat para consulta IP: esperado=cobertura, ciudad, region, pais y coordenadas; obtenido=${casoConsultaOk ? 'ubicacion completa sin persistencia' : textoConsulta}; ${casoConsultaOk ? 'OK' : 'FALLA'}`);
 
-const total = escenarios.length + 3;
+const conexiones = workflow.connections;
+const nombresRamaIp = conexiones['?Hay IP?'].main[0].map(x => x.node).sort().join(',');
+const conexionesMergeOk = conexiones['Etiquetar IP-API'].main[0][0].node === 'Merge geolocalizacion' && conexiones['Etiquetar IP-API'].main[0][0].index === 0 && conexiones['Etiquetar IPinfo'].main[0][0].node === 'Merge geolocalizacion' && conexiones['Etiquetar IPinfo'].main[0][0].index === 1 && conexiones['Merge geolocalizacion'].main[0][0].node === 'Evaluar pedido';
+const nodoMerge = workflow.nodes.find(n => n.name === 'Merge geolocalizacion');
+const fuentesHttp = workflow.nodes.filter(n => n.name === 'IP-API' || n.name === 'IPinfo');
+const conexionesParalelasOk = nombresRamaIp === 'IP-API,IPinfo' && conexionesMergeOk && nodoMerge.typeVersion === 3.2 && nodoMerge.parameters.mode === 'combine' && nodoMerge.parameters.combineBy === 'combineByPosition' && fuentesHttp.every(n => n.onError === 'continueRegularOutput' && n.parameters.url.includes("$('Preparar pedido').first().json.ip"));
+const codigosEtiquetaOk = ['Etiquetar IP-API', 'Etiquetar IPinfo'].every(n => workflow.nodes.find(x => x.name === n).parameters.jsCode.includes('return { json: { geo_'));
+const conexionesAgente = conexiones['DeepSeek Chat Model'];
+const soloModeloOk = conexionesAgente.ai_languageModel[0][0].node === 'AI Agent' && !conexiones['AI Agent'].ai_tool && !conexiones['AI Agent'].ai_memory;
+const persistenciaOk = conexiones['Evaluar pedido'].main[0][0].node === '?Se puede persistir?' && conexiones['?Se puede persistir?'].main[0][0].node === 'PATCH JSON Server' && conexiones['?Se puede persistir?'].main[1][0].node === 'Respuesta final' && conexiones['PATCH JSON Server'].main[0][0].node === 'Respuesta final';
+const ultimoNodoChatOk = workflow.nodes.find(n => n.name === 'Chat Trigger').parameters.options.responseMode === 'lastNode';
+const nodosConocidos = new Set(workflow.nodes.map(n => n.name));
+const referenciasValidas = Object.values(conexiones).every(salidas => Object.values(salidas).flat(2).every(edge => nodosConocidos.has(edge.node)));
+const casoEstructuraOk = conexionesParalelasOk && codigosEtiquetaOk && soloModeloOk && persistenciaOk && ultimoNodoChatOk && referenciasValidas;
+console.log(`[ESTRUCTURA] Ramas HTTP paralelas, Merge por posicion, etiquetas, DeepSeek sin tools, PATCH/final y conexiones: ${casoEstructuraOk ? 'OK' : 'FALLA'}`);
+
+const total = escenarios.length + 4;
 if (caso404Ok) pasaron++;
 if (casoPatchOk) pasaron++;
 if (casoConsultaOk) pasaron++;
+if (casoEstructuraOk) pasaron++;
 console.log(`\n${pasaron} de ${total} casos simulados pasaron.`);
 console.log(`Equivalencia literal del bloque de clases: ${clasesEquivalentes ? 'OK' : 'FALLA'}.`);
 console.log(`Equivalencia del Code node de workflow: ${codigoWorkflowIgual ? 'OK' : 'FALLA'}.`);

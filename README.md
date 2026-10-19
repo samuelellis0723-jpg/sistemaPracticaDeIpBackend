@@ -11,13 +11,19 @@ node simular-nodo-code.js
 
 Las pruebas locales usan exclusivamente datos de prueba en memoria. No consultan IP-API, IPinfo, JSON Server ni n8n. `clases.js` contiene las reglas de negocio; `nodo-code.js` es el adaptador para pegar en un Code node.
 
+## Jerarquía de fuentes geográficas (Reto 1)
+
+`FuenteGeografica` define el método `normalizarRespuesta()`. `FuenteIpApi` y `FuenteIpInfo` heredan con `extends` y sobrescriben ese método para convertir sus formatos distintos en objetos `Ubicacion` con `codigoPais`, `pais`, `region`, `ciudad`, `lat`, `lon`, `ip` y `fuente`. `normalizarFuenteGeografica(fuente, respuesta)` recibe una referencia de tipo base y despacha el método sobrescrito sin distinguir el proveedor. Los métodos estáticos `Ubicacion.desdeIpApi()` y `Ubicacion.desdeIpInfo()` siguen disponibles y delegan a estas clases.
+
+El adaptador `nodo-code.js` crea y usa `FuenteIpApi` y `FuenteIpInfo`; su prefijo de clases debe permanecer idéntico a `clases.js`. `PoliticaEnvio` mantiene las reglas de cobertura, costos, estados y `cuerpoPatch`. `main.js` incluye casos sintéticos para verificar ambas normalizaciones, el despacho polimórfico, errores y equivalencia de decisiones.
+
 ## Workflow n8n
 
 El workflow importable está en [`workflow-n8n.json`](workflow-n8n.json). Las instrucciones para importar, asignar credenciales, definir la dirección de JSON Server y probar el flujo están en [`WORKFLOW_SETUP.md`](WORKFLOW_SETUP.md).
 
 El AI Agent usa DeepSeek para extraer un pedido o reconocer una consulta de cobertura por IP sola. Para consultar, escribe en el chat algo como `¿La IP 8.8.8.8 está dentro de la zona de entrega?`; el flujo consulta ambas APIs y responde si está cubierta, fuera o si no pudo verificar. También muestra ciudad, región/estado, país y coordenadas cuando las APIs las devuelven. Es geolocalización estimada por IP; no proporciona una dirección física exacta. La consulta no requiere datos de pedido ni actualiza JSON Server. En pedidos, las dos consultas GET y el PATCH se ejecutan en nodos HTTP Request del flujo principal. El Code node incorpora las clases de `clases.js` y no duplica las reglas. El agente no tiene tools ni memoria conectadas.
 
-El Code node `Evaluar pedido` contiene el mismo código de [`nodo-code.js`](nodo-code.js), configurado como **Run Once for Each Item**. Lee por nombre `AI Agent`, `IP-API` e `IPinfo` aunque el item actual venga del HTTP Request más reciente. Su campo `persistir` gobierna el IF previo al PATCH.
+Las consultas HTTP salen como ramas paralelas desde `¿Hay IP?`; después, dos Code nodes encapsulan las respuestas como `geo_ipapi` y `geo_ipinfo`. El Merge combina un item de cada rama por posición antes de la evaluación, conservando separados los campos coincidentes de las APIs. `Evaluar pedido` contiene el mismo código de [`nodo-code.js`](nodo-code.js), configurado como **Run Once for Each Item**. Lee pedido/errores desde `AI Agent` y geolocalizaciones desde el item Merge. Su campo `persistir` gobierna el IF previo al PATCH.
 
 La importación y ejecución real en n8n, así como las solicitudes de APIs y JSON Server, siguen pendientes de probar en la instancia del estudiante. La configuración no contiene credenciales ni tokens.
 

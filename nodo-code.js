@@ -11,7 +11,20 @@ class Ubicacion {
   constructor({ pais, codigoPais, region, ciudad, lat, lon, ip, fuente } = {}) {
     Object.assign(this, { pais, codigoPais, region, ciudad, lat, lon, ip, fuente });
   }
-  static desdeIpApi(r) {
+  static desdeIpApi(r) { return normalizarFuenteGeografica(new FuenteIpApi(), r); }
+  static desdeIpInfo(r) { return normalizarFuenteGeografica(new FuenteIpInfo(), r); }
+  esValida() { return Boolean(typeof this.codigoPais === 'string' && this.codigoPais.trim() && typeof this.ip === 'string' && this.ip.trim()); }
+  esPaisSoportado() { return String(this.codigoPais || '').trim().toUpperCase() === 'CR'; }
+}
+
+class FuenteGeografica {
+  normalizarRespuesta() {
+    throw new ErrorNegocio('GEO_FALLIDA', 'La fuente geográfica no implementa la normalización.', 'Debe usarse una clase concreta de geolocalizacion.');
+  }
+}
+
+class FuenteIpApi extends FuenteGeografica {
+  normalizarRespuesta(r) {
     if (!r || typeof r !== 'object' || Array.isArray(r)) throw new ErrorNegocio('GEO_FALLIDA', 'IP-API no devolvió una respuesta válida.', 'Respuesta ausente o con formato inválido.');
     if (r.status !== 'success') {
       const mensaje = String(r.message || 'respuesta sin mensaje');
@@ -23,7 +36,10 @@ class Ubicacion {
     if (!codigoPais || !ip || !r.country) throw new ErrorNegocio('GEO_FALLIDA', 'La respuesta de IP-API está incompleta.', `Campos obligatorios ausentes: ${[!r.country && 'country', !codigoPais && 'countryCode', !ip && 'query'].filter(Boolean).join(', ')}.`);
     return new Ubicacion({ pais: String(r.country), codigoPais: codigoPais.toUpperCase(), region: r.regionName || '', ciudad: r.city || '', lat: r.lat ?? null, lon: r.lon ?? null, ip, fuente: 'ip-api' });
   }
-  static desdeIpInfo(r) {
+}
+
+class FuenteIpInfo extends FuenteGeografica {
+  normalizarRespuesta(r) {
     if (!r || typeof r !== 'object' || Array.isArray(r)) throw new ErrorNegocio('GEO_FALLIDA', 'ipinfo no devolvió una respuesta válida.', 'Respuesta ausente o con formato inválido.');
     if (r.status === 'fail') {
       const mensaje = String(r.message || 'respuesta sin mensaje');
@@ -45,10 +61,14 @@ class Ubicacion {
       if (partes.length !== 2 || !partes.every(Number.isFinite)) throw new ErrorNegocio('GEO_FALLIDA', 'Las coordenadas de ipinfo son inválidas.', `loc recibido: ${r.loc}`);
       [lat, lon] = partes;
     }
-    return new Ubicacion({ pais: codigoPais.toUpperCase() === 'CR' ? 'Costa Rica' : codigoPais.toUpperCase(), codigoPais: codigoPais.toUpperCase(), region: r.region || '', ciudad: r.city || '', lat, lon, ip, fuente: 'ipinfo' });
+    const codigoNormalizado = codigoPais.toUpperCase();
+    return new Ubicacion({ pais: codigoNormalizado === 'CR' ? 'Costa Rica' : codigoNormalizado, codigoPais: codigoNormalizado, region: r.region || '', ciudad: r.city || '', lat, lon, ip, fuente: 'ipinfo' });
   }
-  esValida() { return Boolean(typeof this.codigoPais === 'string' && this.codigoPais.trim() && typeof this.ip === 'string' && this.ip.trim()); }
-  esPaisSoportado() { return String(this.codigoPais || '').trim().toUpperCase() === 'CR'; }
+}
+
+function normalizarFuenteGeografica(fuente, respuesta) {
+  if (!(fuente instanceof FuenteGeografica)) throw new ErrorNegocio('GEO_FALLIDA', 'La fuente geográfica no es válida.', 'Se esperaba una instancia de FuenteGeografica.');
+  return fuente.normalizarRespuesta(respuesta);
 }
 
 class Pedido {
@@ -77,10 +97,10 @@ class Pedido {
 class PoliticaEnvio {
   constructor(config) { this.config = config; }
   normalizar(texto) { return String(texto || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase(); }
-  estaEnCobertura(ubicacion) { return Boolean(ubicacion && ubicacion.esPaisSoportado() && this.obtenerZona(ubicacion)); }
-  obtenerZona(ubicacion) {
-    if (!ubicacion || !ubicacion.esPaisSoportado()) return null;
-    const region = this.normalizar(ubicacion.region);
+  estaEnCobertura(ubicación) { return Boolean(ubicación && ubicación.esPaisSoportado() && this.obtenerZona(ubicación)); }
+  obtenerZona(ubicación) {
+    if (!ubicación || !ubicación.esPaisSoportado()) return null;
+    const region = this.normalizar(ubicación.region);
     if (!region) return null;
     for (const [zona, regiones] of Object.entries(this.config.regionesPorZona || {})) {
       if (regiones.some(alias => { const a = this.normalizar(alias); return region === a || region.includes(a); })) return zona;
@@ -96,7 +116,7 @@ class PoliticaEnvio {
   salida(pedidoId, aprobado, estado, zona, costoEnvio, total, codigo, motivo, detalleTecnico, cuerpoPatch) {
     return { pedidoId: pedidoId ?? null, aprobado, estado, zona: zona ?? null, costoEnvio: costoEnvio ?? null, total: total ?? null, codigo: codigo ?? null, motivo: motivo || '', detalleTecnico: detalleTecnico || '', cuerpoPatch };
   }
-  evaluar(entrada, ubicacionA, ubicacionB) {
+  evaluar(entrada, ubicaciónA, ubicaciónB) {
     let pedido, pedidoId = entrada && typeof entrada === 'object' ? entrada.id ?? null : null;
     try {
       pedido = entrada instanceof Pedido ? entrada : new Pedido(entrada);
@@ -110,15 +130,15 @@ class PoliticaEnvio {
         pedido.rechazar(codigo, motivo);
         return this.salida(pedidoId, false, 'rechazado', null, null, null, codigo, motivo, 'Se requiere id, cliente, IP y artículos con cantidad, precio y peso válidos.', { estado: 'rechazado', motivoRechazo: motivo, codigoRechazo: codigo });
       }
-      const validar = (u, etiqueta) => {
+      const válidar = (u, etiqueta) => {
         if (u === null || u === undefined) return null;
         if (u instanceof ErrorNegocio) throw u;
-        if (!(u instanceof Ubicacion) || !u.esValida()) throw new ErrorNegocio('GEO_FALLIDA', `${etiqueta} no contiene una ubicación validada.`, 'Objeto de ubicación inválido o de tipo inesperado.');
+        if (!(u instanceof Ubicacion) || !u.esValida()) throw new ErrorNegocio('GEO_FALLIDA', `${etiqueta} no contiene una ubicación válidada.`, 'Objeto de ubicación inválido o de tipo inesperado.');
         return u;
       };
-      let a = validar(ubicacionA, 'IP-API'), b = validar(ubicacionB, 'ipinfo');
+      let a = válidar(ubicaciónA, 'IP-API'), b = válidar(ubicaciónB, 'ipinfo');
       if (!a && !b) throw new ErrorNegocio('GEO_FALLIDA', 'No fue posible verificar la ubicación. Intente de nuevo.', 'Ninguna fuente de geolocalización está disponible.');
-      if (a && b && a.codigoPais.toUpperCase() !== b.codigoPais.toUpperCase()) throw new ErrorNegocio('GEO_INCONSISTENTE', 'Las fuentes de ubicación no coinciden. No podemos validar la cobertura.', `IP-API: ${a.codigoPais}; ipinfo: ${b.codigoPais}.`);
+      if (a && b && a.codigoPais.toUpperCase() !== b.codigoPais.toUpperCase()) throw new ErrorNegocio('GEO_INCONSISTENTE', 'Las fuentes de ubicación no coinciden. No podemos válidar la cobertura.', `IP-API: ${a.codigoPais}; ipinfo: ${b.codigoPais}.`);
       const normalizarIp = valor => String(valor || '').trim().toLowerCase();
       if (a && b && normalizarIp(a.ip) !== normalizarIp(b.ip)) throw new ErrorNegocio('GEO_INCONSISTENTE', 'Las fuentes no devolvieron la misma IP consultada.', `IP-API: ${a.ip}; ipinfo: ${b.ip}.`);
       const ipPedido = normalizarIp(pedido.ip);
@@ -153,8 +173,9 @@ class PoliticaEnvio {
     }
   }
 }
+
 // Adaptador n8n para el workflow con HTTP Request fuera del AI Agent.
-// Nombres confirmados en workflow-n8n.json: AI Agent, IP-API e IPinfo.
+// Nombres confirmados en workflow-n8n.json: AI Agent y Merge geolocalizacion.
 // Configure este nodo en modo "Run Once for Each Item". No hace solicitudes HTTP.
 const CONFIG_ENVIO = {
   regionesPorZona: {
@@ -278,12 +299,14 @@ try {
   const esConsultaCobertura = datosAgente.modo === 'consulta_cobertura';
   const fallos = [];
 
-  const respuestaIpApi = leerNodo('IP-API');
-  const respuestaIpInfo = leerNodo('IPinfo');
-  // Alias opcional para instalaciones que renombren IP-API a ip-api.
-  const respuestaIpApiFinal = respuestaIpApi === null ? leerNodo('ip-api') : respuestaIpApi;
-  const ubicacionA = leerUbicacion(respuestaIpApiFinal, r => Ubicacion.desdeIpApi(r), 'IP-API', fallos);
-  const ubicacionB = leerUbicacion(respuestaIpInfo, r => Ubicacion.desdeIpInfo(r), 'IPinfo', fallos);
+  // Merge combina por posicion dos objetos etiquetados para evitar pisar campos de ambas APIs.
+  const datosFusionados = typeof $json === 'object' && $json !== null && !Array.isArray($json) ? $json : {};
+  const respuestaIpApi = datosFusionados.geo_ipapi ?? null;
+  const respuestaIpInfo = datosFusionados.geo_ipinfo ?? null;
+  const fuenteIpApi = new FuenteIpApi();
+  const fuenteIpInfo = new FuenteIpInfo();
+  const ubicacionA = leerUbicacion(respuestaIpApi, r => normalizarFuenteGeografica(fuenteIpApi, r), 'IP-API', fallos);
+  const ubicacionB = leerUbicacion(respuestaIpInfo, r => normalizarFuenteGeografica(fuenteIpInfo, r), 'IPinfo', fallos);
 
   const politica = new PoliticaEnvio(CONFIG_ENVIO);
   if (esConsultaCobertura && !(typeof datosAgente.pedido.ip === 'string' && datosAgente.pedido.ip.trim())) {
