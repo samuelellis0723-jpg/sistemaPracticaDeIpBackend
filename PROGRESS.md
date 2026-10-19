@@ -228,6 +228,43 @@ Pendiente (no simulado): respuestas reales de API, petición 404 de JSON Server 
 - Contrato confirmado: `PoliticaEnvio.evaluar(entrada, ubicacionA, ubicacionB)` toma un pedido y dos `Ubicacion`/errores/nulos, y devuelve los campos de decisión más `cuerpoPatch`. Workflow nombra las APIs `IP-API` e `IPinfo`; ambas responses llevan `body`, `statusCode`, `headers` en éxito, y errores pueden llegar como item `error` por `continueRegularOutput`.
 - H2: el adaptador usará los nombres existentes exactos `AI Agent`, `IP-API` e `IPinfo`; aceptará body directo o `{statusCode, body}` y tratará error de transporte/estado no 2xx como fuente ausente. Añadirá `persistir` derivado solo de ID apto y `cuerpoPatch` objeto para que IF y pruebas lo puedan consumir sin repetir reglas de negocio.
 
+### Continuación posterior — H3 Code adaptado
+- `nodo-code.js` ahora obtiene la salida del agente por `$('AI Agent').all()` y las respuestas por nombre `IP-API`/`IPinfo`; no toma el pedido de `$json`, que puede ser el resultado del HTTP Request más reciente.
+- Admite respuesta directa, JSON string, `{statusCode, body}`, error técnico del nodo, 429, cuerpo ausente/JSON inválido, null y arrays inesperados. Usa parsers `Ubicacion` y delega decisión a `PoliticaEnvio.evaluar`.
+- Conserva la verificación de IP de las clases. Produce los campos existentes, `cuerpoPatch` y `persistir` para el IF; el Code no hace HTTP.
+- Workflow `Evaluar pedido` actualizado para usar textualmente `nodo-code.js` en modo Run Once for Each Item. El IF usa `persistir === true`.
+
+### Continuación posterior — H4 simulador actualizado
+- `simular-nodo-code.js` ahora construye contextos sintéticos separados de AI Agent, IP-API e IPinfo como en el workflow; el test de HTTP 404 ejecuta el script real del nodo final obtenido de `workflow-n8n.json`.
+- Añadidos escenarios de salida aprobada, gratis, recargo, fuera de cobertura, discrepancia, fallback, ambas caídas/429, IP incorrecta, pedido procesado, malformed/null/array/campos faltantes, ID numérico/string, omisión de persistencia y PATCH 404/200 simulado.
+- Resultado de esta ejecución: 39/39 simulaciones pasaron. El simulador verifica además que el Code del workflow sea igual a `nodo-code.js`.
+
+### Continuación posterior — H5 equivalencia
+- Comparación literal: `clases.js` y prefijo de clases en `nodo-code.js` iguales, 12114 caracteres. El Code del workflow coincide literalmente con `nodo-code.js`. No se modificó `clases.js`.
+
+### Continuación posterior — H6 Persistencia y respuesta
+- Confirmado en el export: el IF usa `={{ $json.persistir === true }}`; PATCH usa `pedidoId` codificado como segmento y body JSON `={{ $json.cuerpoPatch }}`. Esto conserva IDs tipo texto, como `P001`.
+- El HTTP PATCH usa response con status completo y `Never Error`, además de `onError: continueRegularOutput`; el Code final lee 404 y errores de transporte. `nodo-code.js` no contiene solicitudes HTTP.
+- La tabla y expresiones de `WORKFLOW_SETUP.md` se actualizaron con el contrato de salida actual. 404 probado solo en simulación explícita; no hay JSON Server real.
+
+### Continuación posterior — H7 Documentación
+- `README.md` describe arquitectura DeepSeek sin tools, ambas GET, Code compartido, PATCH, comandos de main/simulación, cómo ejecutar `consultar-ip.js`, cómo usar los pares de fixtures numerados, comandos JSON Server GET/PATCH/404, credenciales y pendientes.
+- `WORKFLOW_SETUP.md` explica además la tabla de nodos, la dirección según host/Docker/Cloud, setup de n8n y las variables/credenciales a asignar. No hay decisiones de reglas/tarifas por confirmar; la versión n8n o el límite de nodos de la rúbrica sí deben consultarse con el docente si aplican.
+
+### Continuación posterior — H8 Pruebas finales de esta sesión
+- `node main.js` → `21 de 21 casos pasaron.` y aviso explícito de que las ubicaciones son datos de prueba en memoria.
+- `node simular-nodo-code.js` → `39 de 39 casos simulados pasaron.`; clases iguales; Code del workflow igual a `nodo-code.js`; pendientes de APIs reales, JSON Server y n8n.
+- `node --check main.js`, `node --check simular-nodo-code.js` y `node --check consultar-ip.js` terminaron sin errores. El JSON del workflow parsea y los tres scripts Code pasan verificación de sintaxis JavaScript envueltos como Code node.
+- Los resultados completos están en la salida de terminal de esta sesión; no se ejecutó `consultar-ip.js`.
+
+### Continuación posterior — H9 Árbitro adversarial
+- Agente: el adaptador lee únicamente su salida por nombre; casos de salida vacía/null/array/JSON inválido/missing `pedido` devuelven el esquema controlado, sin excepción no manejada.
+- HTTP: acepta bodies directos/string y wrappers; trata 429/503 y error de transporte como fuente ausente para fallback; distingue body de error de IPinfo y usa los códigos de clase.
+- Política: pruebas sintéticas verifican ambas fuentes, una fuente, ambas caídas, IP retornada diferente, IPs discordantes y pedido procesado; la fuente no válida no puede provocar aprobación fuera de reglas de `clases.js`.
+- Persistencia: ID string/número conservado, ID ausente no persiste; PATCH de prueba 404 produce `PEDIDO_NO_ENCONTRADO`; 200 se marca persistido. Error técnico deja `estado` fuera de `cuerpoPatch`.
+- Workflow: ambos GET conservan la misma IP de `Preparar pedido`; Agent no conecta `ai_tool`; el Chat Trigger responde desde la salida `output` del último nodo. Node names del export (`IP-API`) y alias `ip-api` se soportan.
+- Límite sin resolver: n8n, APIs y JSON Server no están disponibles en esta sesión; importar, asignar credenciales y observar la respuesta real del PATCH siguen pendientes, no simulados.
+
 ### H1 — Inspección y compatibilidad
 - Revisados `clases.js`, `nodo-code.js`, `db.json`, `README.md` y este archivo. El Code de evaluación consume `pedido`, ubicaciones `Ubicacion` validadas y llama `PoliticaEnvio.evaluar(entrada, ubicacionA, ubicacionB)`; la salida incluye `pedidoId`, decisión, errores y `cuerpoPatch`.
 - `db.json` tiene IDs de texto `P001` a `P008` y una colección `pedidos`. No se comprobó una versión instalada de JSON Server.
@@ -264,3 +301,14 @@ Pendiente (no simulado): respuestas reales de API, petición 404 de JSON Server 
 - La salida del Agent puede incumplir su prompt; el modo JSON y el parseo rechazan JSON inválido, pero la conducta del modelo solo se confirma al ejecutar en la instancia.
 - IPinfo puede requerir token según plan. Se debe crear una credencial Query Auth en n8n si aplica; no se exportó un token.
 - Pendiente: importar el JSON en la versión de n8n destino, confirmar el modelo en su selector, probar credenciales DeepSeek/IPinfo, hacer una ejecución real, observar respuesta HTTP y comprobar 2xx/404 contra JSON Server. No se inventaron salidas reales.
+
+### H8 — Consulta de cobertura por IP desde el chat
+- El prompt del Agent distingue `modo: "consulta_cobertura"` cuando el usuario solo pregunta por una IP; `Preparar pedido` conserva la IP y el Code de evaluación lee el modo directamente desde `AI Agent`.
+- El adaptador usa un pedido sintético solo dentro de la evaluación existente, elimina su ID del resultado y devuelve `tipoResultado: "consulta_cobertura"`, sin `cuerpoPatch` y con `persistir: false`. El mensaje final indica dentro, fuera o verificación no disponible. La ruta normal de pedidos mantiene su comportamiento.
+- Evidencia local: `node main.js` pasó 21/21; `node simular-nodo-code.js` ejercitó consulta IP sola cubierta, fuera, sin geolocalización y sin IP, además de comprobar mensaje final sin PATCH. Todos los datos geográficos de esos casos son datos de prueba en memoria.
+- Limitación: no está comprobada la clasificación del modelo ni la respuesta en n8n real; la importación y asignación de credenciales siguen pendientes.
+
+### H9 — Mostrar ubicación estimada en la respuesta de chat
+- La consulta de cobertura ahora adjunta ciudad, región, país/código, coordenadas, IP y fuente(s) disponibles a la decisión. Prefiere región de IP-API para mantener la regla de zonas; completa los otros campos con la respuesta de ipinfo si faltan.
+- El mensaje final incluye esos datos y aclara que se trata de ubicación estimada por IP, no de dirección física exacta.
+- Verificación sintética añadida al simulador: comprueba ciudad, Heredia, Costa Rica, latitud/longitud y ambas fuentes en la salida final; no ejecuta APIs reales.

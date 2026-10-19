@@ -40,7 +40,7 @@ const IP_PRUEBA = '203.0.113.25';
 const ipapi = (region = 'Heredia', codigo = 'CR', pais = codigo === 'CR' ? 'Costa Rica' : 'United States') => ({ status: 'success', message: '', country: pais, countryCode: codigo, regionName: region, city: 'Ciudad de prueba', lat: 9.9, lon: -84, query: IP_PRUEBA });
 const ipinfo = (region = 'Heredia', country = 'CR') => ({ ip: IP_PRUEBA, city: 'Ciudad de prueba', region, country, loc: '9.9,-84' });
 const pedido = (id = 'T1', precio = 10000, peso = 1, estado = 'pendiente') => ({ id, cliente: 'Cliente de prueba', ip: IP_PRUEBA, items: [{ nombre: 'Artículo de prueba', cantidad: 1, precio, pesoKg: peso }], estado });
-const agente = (p = pedido(), errores = []) => ({ output: JSON.stringify({ pedido: p, errores }) });
+const agente = (p = pedido(), errores = [], modo = 'pedido') => ({ output: JSON.stringify({ modo, pedido: p, errores }) });
 const escenario = (p = pedido(), a = ipapi(), b = ipinfo(), errores) => ({ 'AI Agent': agente(p, errores), 'IP-API': a, IPinfo: b });
 const escenarios = [];
 function agregar(nombre, nodos, esperado, comprobar = r => r.codigo) { escenarios.push({ nombre, nodos, esperado, comprobar }); }
@@ -53,6 +53,7 @@ agregar('País fuera de cobertura', escenario(pedido('T5'), ipapi('California', 
 agregar('País discrepante entre fuentes', escenario(pedido('T6'), ipapi('Heredia', 'CR'), ipinfo('Heredia', 'US')), 'GEO_INCONSISTENTE');
 agregar('IP privada reportada por IP-API', escenario(pedido('T7'), { status: 'fail', message: 'private range', query: IP_PRUEBA }, null), 'IP_PRIVADA_O_RESERVADA');
 agregar('IP inválida reportada por IP-API', escenario(pedido('T8'), { status: 'fail', message: 'invalid query', query: IP_PRUEBA }, null), 'IP_INVALIDA');
+agregar('Error JSON de IPinfo reconocido como respuesta de API', escenario(pedido('T8B'), null, { error: { title: 'Invalid IP', message: 'invalid query' } }), 'IP_INVALIDA');
 agregar('Datos incompletos', escenario({ id: 'T9', cliente: '', ip: '', items: [] }), 'DATOS_INCOMPLETOS');
 agregar('Solo IP-API disponible', escenario(pedido('T10'), ipapi(), null), 'aprobado', r => r.estado);
 agregar('Solo IPinfo disponible', escenario(pedido('T11'), null, ipinfo()), 'aprobado', r => r.estado);
@@ -81,6 +82,11 @@ agregar('ID numérico preservado y persistible', escenario(pedido(101)), true, r
 agregar('ID string preservado y persistible', escenario(pedido('001')), '001', r => r.persistir && r.pedidoId);
 agregar('Sin ID válido no se debe persistir', escenario(pedido(null)), false, r => r.persistir);
 agregar('Error HTTP conserva estado y solo intenta log técnico', escenario(pedido('T28'), { statusCode: 429, body: {} }, null), true, r => r.estado === 'pendiente' && r.persistir && !Object.hasOwn(r.cuerpoPatch, 'estado'));
+const consultaIp = ip => ({ ip });
+agregar('Consulta IP sola dentro de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi(), IPinfo: ipinfo() }, true, r => r.tipoResultado === 'consulta_cobertura' && r.aprobado && r.codigo === 'COBERTURA_DISPONIBLE' && r.zona && !r.persistir && r.cuerpoPatch === null && r.pedidoId === null);
+agregar('Consulta IP sola fuera de cobertura sin persistencia', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi('Zona desconocida'), IPinfo: ipinfo('Zona desconocida') }, 'FUERA_DE_COBERTURA', r => r.codigo);
+agregar('Consulta IP sola sin datos geograficos no afirma cobertura', { 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': null, IPinfo: null }, true, r => !r.aprobado && r.codigo === 'GEO_FALLIDA' && !r.persistir);
+agregar('Consulta de cobertura sin IP solicita el dato', { 'AI Agent': agente({}, [], 'consulta_cobertura'), 'IP-API': null, IPinfo: null }, 'DATOS_INCOMPLETOS', r => r.codigo);
 
 let pasaron = 0;
 const camposSalida = ['pedidoId', 'aprobado', 'estado', 'zona', 'costoEnvio', 'total', 'codigo', 'motivo', 'detalleTecnico', 'cuerpoPatch', 'persistir'];
@@ -102,10 +108,15 @@ console.log(`[SIMULADO] PATCH HTTP 404: esperado=PEDIDO_NO_ENCONTRADO; obtenido=
 const respuestaPatchOk = ejecutarRespuestaFinal(ejecutar(escenario()).json, { statusCode: 200, body: {} })[0];
 const casoPatchOk = respuestaPatchOk.json.persistido === true;
 console.log(`[SIMULADO] PATCH HTTP 200: esperado=persistido; obtenido=${respuestaPatchOk.json.persistido}; ${casoPatchOk ? 'OK' : 'FALLA'}`);
+const respuestaConsulta = ejecutarRespuestaFinal(ejecutar({ 'AI Agent': agente(consultaIp(IP_PRUEBA), [], 'consulta_cobertura'), 'IP-API': ipapi(), IPinfo: ipinfo() }).json)[0];
+const textoConsulta = respuestaConsulta.json.output;
+const casoConsultaOk = textoConsulta.includes('SI, esta dentro') && textoConsulta.includes('Ciudad: Ciudad de prueba') && textoConsulta.includes('Region/estado: Heredia') && textoConsulta.includes('Pais: Costa Rica (CR)') && textoConsulta.includes('Coordenadas: 9.9, -84') && textoConsulta.includes('Fuente: ip-api e ipinfo') && respuestaConsulta.json.persistido === undefined;
+console.log(`[SIMULADO] Respuesta del chat para consulta IP: esperado=cobertura, ciudad, region, pais y coordenadas; obtenido=${casoConsultaOk ? 'ubicacion completa sin persistencia' : textoConsulta}; ${casoConsultaOk ? 'OK' : 'FALLA'}`);
 
-const total = escenarios.length + 2;
+const total = escenarios.length + 3;
 if (caso404Ok) pasaron++;
 if (casoPatchOk) pasaron++;
+if (casoConsultaOk) pasaron++;
 console.log(`\n${pasaron} de ${total} casos simulados pasaron.`);
 console.log(`Equivalencia literal del bloque de clases: ${clasesEquivalentes ? 'OK' : 'FALLA'}.`);
 console.log(`Equivalencia del Code node de workflow: ${codigoWorkflowIgual ? 'OK' : 'FALLA'}.`);

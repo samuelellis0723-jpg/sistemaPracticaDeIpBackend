@@ -209,7 +209,8 @@ function leerPedidoAgente(salida) {
   if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) throw new Error('La salida del agente debe ser un objeto JSON.');
   if (!bruto.pedido || typeof bruto.pedido !== 'object' || Array.isArray(bruto.pedido)) throw new Error('Falta el objeto pedido en la salida del agente.');
   const errores = Array.isArray(bruto.errores) ? bruto.errores : [];
-  return { pedido: bruto.pedido, errores };
+  const modo = bruto.modo === 'consulta_cobertura' ? 'consulta_cobertura' : 'pedido';
+  return { pedido: bruto.pedido, errores, modo };
 }
 
 function leerUbicacion(respuesta, lector, nombreFuente, fallos) {
@@ -224,9 +225,10 @@ function leerUbicacion(respuesta, lector, nombreFuente, fallos) {
 
   let cuerpo = respuesta;
   const tieneEstadoHttp = Object.prototype.hasOwnProperty.call(respuesta, 'statusCode');
-  if (respuesta.error && !tieneEstadoHttp && !Object.prototype.hasOwnProperty.call(respuesta, 'body') && !('ip' in respuesta) && !('query' in respuesta) && !('country' in respuesta)) {
-    const errorHttp = respuesta.error;
-    fallos.push(nombreFuente + ': ' + String(errorHttp.message || errorHttp.description || errorHttp));
+  const errorRespuesta = respuesta.error;
+  const pareceErrorTransporte = errorRespuesta && (typeof errorRespuesta !== 'object' || !errorRespuesta.title);
+  if (errorRespuesta && !tieneEstadoHttp && !Object.prototype.hasOwnProperty.call(respuesta, 'body') && !('ip' in respuesta) && !('query' in respuesta) && !('country' in respuesta) && pareceErrorTransporte) {
+    fallos.push(nombreFuente + ': ' + String(errorRespuesta.message || errorRespuesta.description || errorRespuesta));
     return null;
   }
   if (tieneEstadoHttp) {
@@ -273,6 +275,7 @@ try {
   if (!salidaAgente) throw new Error('No fue posible leer la salida del nodo AI Agent.');
   const datosAgente = leerPedidoAgente(salidaAgente);
   pedidoParseado = datosAgente.pedido;
+  const esConsultaCobertura = datosAgente.modo === 'consulta_cobertura';
   const fallos = [];
 
   const respuestaIpApi = leerNodo('IP-API');
@@ -283,7 +286,53 @@ try {
   const ubicacionB = leerUbicacion(respuestaIpInfo, r => Ubicacion.desdeIpInfo(r), 'IPinfo', fallos);
 
   const politica = new PoliticaEnvio(CONFIG_ENVIO);
-  resultado = politica.evaluar(datosAgente.pedido, ubicacionA, ubicacionB);
+  if (esConsultaCobertura && !(typeof datosAgente.pedido.ip === 'string' && datosAgente.pedido.ip.trim())) {
+    resultado = {
+      pedidoId: null, aprobado: false, estado: 'consulta_cobertura', zona: null,
+      costoEnvio: null, total: null, codigo: 'DATOS_INCOMPLETOS',
+      motivo: 'Escribe una direccion IP para consultar la cobertura.',
+      detalleTecnico: 'La consulta de cobertura requiere una IP textual.',
+      cuerpoPatch: null, persistir: false, tipoResultado: 'consulta_cobertura'
+    };
+  } else {
+    const pedidoEvaluado = esConsultaCobertura ? {
+      id: '__consulta_cobertura__', cliente: 'Consulta de cobertura', ip: datosAgente.pedido.ip,
+      items: [{ cantidad: 1, precio: 0, pesoKg: 0 }]
+    } : datosAgente.pedido;
+    resultado = politica.evaluar(pedidoEvaluado, ubicacionA, ubicacionB);
+    if (esConsultaCobertura) {
+      const decisionCobertura = resultado;
+      const ipConsultada = datosAgente.pedido.ip.trim();
+      const fuenteUbicacion = ubicacionA instanceof Ubicacion
+        ? ubicacionA
+        : ubicacionB instanceof Ubicacion ? ubicacionB : null;
+      const fuenteRegion = ubicacionA instanceof Ubicacion && ubicacionA.region
+        ? ubicacionA
+        : ubicacionB instanceof Ubicacion && ubicacionB.region ? ubicacionB : fuenteUbicacion;
+      const ubicacionConsulta = fuenteUbicacion ? {
+        ip: ipConsultada,
+        ciudad: (ubicacionA instanceof Ubicacion && ubicacionA.ciudad) || (ubicacionB instanceof Ubicacion && ubicacionB.ciudad) || null,
+        region: fuenteRegion && fuenteRegion.region || null,
+        pais: (ubicacionA instanceof Ubicacion && ubicacionA.pais) || (ubicacionB instanceof Ubicacion && ubicacionB.pais) || null,
+        codigoPais: (ubicacionA instanceof Ubicacion && ubicacionA.codigoPais) || (ubicacionB instanceof Ubicacion && ubicacionB.codigoPais) || null,
+        lat: (ubicacionA instanceof Ubicacion && ubicacionA.lat !== null ? ubicacionA.lat : null) ?? (ubicacionB instanceof Ubicacion ? ubicacionB.lat : null),
+        lon: (ubicacionA instanceof Ubicacion && ubicacionA.lon !== null ? ubicacionA.lon : null) ?? (ubicacionB instanceof Ubicacion ? ubicacionB.lon : null),
+        fuente: ubicacionA instanceof Ubicacion && ubicacionB instanceof Ubicacion ? 'ip-api e ipinfo' : fuenteUbicacion.fuente
+      } : null;
+      const motivoCobertura = decisionCobertura.aprobado
+        ? 'La IP ' + ipConsultada + ' esta dentro de la zona de entrega ' + decisionCobertura.zona + '.'
+        : decisionCobertura.codigo === 'FUERA_DE_COBERTURA'
+          ? 'La IP ' + ipConsultada + ' esta fuera de la zona de entrega.'
+          : 'No se pudo confirmar la cobertura de la IP ' + ipConsultada + ': ' + decisionCobertura.motivo;
+      resultado = {
+        pedidoId: null, aprobado: decisionCobertura.aprobado, estado: 'consulta_cobertura',
+        zona: decisionCobertura.zona, costoEnvio: null, total: null,
+        codigo: decisionCobertura.aprobado ? 'COBERTURA_DISPONIBLE' : decisionCobertura.codigo,
+        motivo: motivoCobertura, detalleTecnico: decisionCobertura.detalleTecnico,
+        ubicacion: ubicacionConsulta, cuerpoPatch: null, persistir: false, tipoResultado: 'consulta_cobertura'
+      };
+    }
+  }
   if (datosAgente.errores.length && !resultado.aprobado) {
     const resumen = datosAgente.errores.map(e => typeof e === 'string' ? e : e && (e.mensaje || e.message || e.codigo) || 'error de extracción').join('; ').slice(0, 500);
     fallos.push('AI Agent: ' + resumen);

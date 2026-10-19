@@ -4,21 +4,21 @@
 
 ## Qué hace
 
-El Chat Trigger recibe el texto real del usuario. El AI Agent usa el nodo nativo DeepSeek Chat Model para extraer los campos del pedido a JSON; no calcula ni decide y no tiene conexiones `ai_tool` ni memoria. Dos HTTP Request GET consultan IP-API e IPinfo usando la misma IP extraída. El Code node carga las clases existentes y delega en `PoliticaEnvio`. Un IF omite el PATCH cuando falta un ID válido; otro nodo HTTP Request aplica exactamente `cuerpoPatch`. La respuesta final distingue actualización confirmada, 404 y fallo técnico y devuelve el campo `output` que lee Chat Trigger en modo `lastNode`.
+El Chat Trigger recibe el texto real del usuario. El AI Agent usa DeepSeek para extraer el pedido o reconocer una consulta de cobertura por IP sola; no calcula ni decide y no tiene conexiones `ai_tool` ni memoria. Dos HTTP Request GET consultan IP-API e IPinfo usando la misma IP. El Code node carga las clases existentes y delega en `PoliticaEnvio`. Una consulta de IP no requiere pedido y nunca ejecuta PATCH: responde si está en zona, fuera o si no fue posible verificar; cuando las APIs lo devuelven, muestra ciudad, región/estado, país, coordenadas e IP. Es una ubicación estimada por IP, no una dirección física exacta. En pedidos, el IF y HTTP Request guardan `cuerpoPatch`; la respuesta final distingue actualización confirmada, 404 y fallo técnico.
 
 ## Nodos
 
 | Nodo | Propósito | Entrada | Salida |
 |---|---|---|---|
 | Chat Trigger | Recibir el mensaje del chat | Texto del usuario | `chatInput` |
-| AI Agent | Extraer pedido y errores sin completar datos | `chatInput` real | JSON `{ pedido, errores }` |
+| AI Agent | Extraer pedido o clasificar consulta de cobertura sin completar datos | `chatInput` real | JSON `{ modo, pedido, errores }` |
 | DeepSeek Chat Model | Modelo nativo conectado al puerto de modelo del agente | Prompt del agente | Respuesta JSON; sin tools conectadas |
 | Preparar pedido (Code) | Analizar JSON y obtener `pedido.ip`; reportar JSON inválido sin llamar APIs | Salida del agente | `pedido`, `ip`, `errores`, indicadores de parseo |
 | ¿Hay IP? (IF) | Omitir consultas si no hay IP textual | Salida de Preparar pedido | Rama sí: consultas; rama no: evaluación sin geolocalización |
 | IP-API (HTTP Request) | GET IP-API, conserva body, status y headers; continúa ante errores | IP de Preparar pedido | Respuesta original, status o error |
 | IPinfo (HTTP Request) | GET IPinfo con la misma expresión de IP; conserva body, status y headers | Misma IP de Preparar pedido | Respuesta original, status o error |
-| Evaluar pedido (Code) | Cargar las clases del proyecto y evaluar respuestas identificadas por nombre de nodo | Pedido y outputs de ambas APIs | Resultado de `PoliticaEnvio`, incluido `cuerpoPatch` |
-| ¿Se puede persistir? (IF) | Comprobar ID no vacío y `cuerpoPatch` objeto | Resultado del evaluador | PATCH o salida sin PATCH |
+| Evaluar pedido (Code) | Ejecutar `nodo-code.js`, cargar las clases y leer Agent/GETs por nombre de nodo | Outputs por nombre de `AI Agent`, `IP-API` e `IPinfo` | Resultado de `PoliticaEnvio`, incluido `cuerpoPatch` y `persistir` |
+| ¿Se puede persistir? (IF) | Comprobar `persistir === true` calculado por Code | Resultado del evaluador | PATCH o salida sin PATCH |
 | PATCH JSON Server (HTTP Request) | Enviar `PATCH /pedidos/{id}` con `cuerpoPatch` en JSON | Resultado del evaluador | Body, HTTP status o error |
 | Respuesta final (Code) | Convertir resultado y PATCH en mensaje para chat | Evaluación y output PATCH si ejecutó | `output` legible y estado de persistencia |
 
@@ -32,12 +32,13 @@ Los nodos adicionales respecto a las cuatro etapas conceptuales (chat, agente, e
 4. Inicia JSON Server sirviendo el `db.json` del laboratorio. Cambia en el nodo **PATCH JSON Server** la base de URL `http://localhost:3000` si el proceso de n8n no puede alcanzar el servicio en esa dirección.
 5. Revisa el registro objetivo y usa un pedido pendiente con ID, cliente, IP y artículos completos. Guarda y prueba el workflow en el chat de n8n.
 
-El Chat Trigger está en modo chat alojado con respuesta `lastNode`. El último Code node devuelve `{ output: "..." }`; no se usa Respond to Webhook.
+El Chat Trigger está en modo chat alojado con respuesta `lastNode`. Para revisar cobertura, escribe por ejemplo `¿La IP 8.8.8.8 está dentro de la zona de entrega?`; el Agent la entrega como `modo: "consulta_cobertura"`, se consultan las dos fuentes y el último Code node responde con sí, no o que no se pudo confirmar. No se requiere ID, cliente ni artículos y no se actualiza JSON Server para esta consulta. Para procesar un pedido incluye sus datos como en el ejemplo siguiente. El último Code node devuelve `{ output: "..." }`; no se usa Respond to Webhook.
 
 ## URLs y respuestas HTTP
 
 - **IP-API** construye `http://ip-api.com/json/{ip}` y envía `fields=status,message,country,countryCode,regionName,city,lat,lon,query` como query param. IPinfo construye `https://ipinfo.io/{misma-ip}/json`.
 - Ambos GET usan formato JSON, `Never Error` y `Include Response Headers and Status`; el ajuste de nodo `On Error → Continue (using regular output)` permite que los errores de red alcancen Code. El evaluador obtiene cada respuesta por nombre (`IP-API`, `IPinfo`) y no depende de emparejar items por orden.
+- Code devuelve `persistir`, verdadero solo si `pedidoId` es string no vacío o número finito y `cuerpoPatch` es objeto. El IF usa `={{ $json.persistir === true }}`.
 - El PATCH usa `={{ 'http://localhost:3000/pedidos/' + encodeURIComponent(String($json.pedidoId)) }}`, método PATCH y body JSON `={{ $json.cuerpoPatch }}`. Tiene `Never Error`, status completo y `On Error → Continue (using regular output)`. HTTP 404 se convierte en `PEDIDO_NO_ENCONTRADO`; otros errores se reportan como no confirmados. La política ya produce un body de solo `ultimoIntento` para errores técnicos y pedidos procesados, por lo que esos PATCH no cambian `estado`.
 - La consulta HTTP de n8n ejecuta desde el host/contenedor de n8n. Si JSON Server corre en el mismo host, `localhost` puede servir. Si n8n y JSON Server están en contenedores distintos, usa el nombre de servicio de Docker Compose, por ejemplo `http://json-server:3000`. Si n8n está en Docker Desktop y JSON Server en el host, suele funcionar `http://host.docker.internal:3000`. En n8n Cloud, `localhost` apunta al servicio remoto; usa un endpoint alcanzable desde Cloud. Verifica acceso desde el entorno n8n.
 
@@ -55,7 +56,7 @@ Para ejercitar resultados esperados sin red, usa `node main.js` y `node simular-
 
 ## Validación de versiones
 
-El workspace no trae instalación ni versión local de n8n, así que no se puede certificar la importación contra la versión del estudiante. Para preparar el export se revisaron fuentes oficiales de n8n que muestran los tipos y versiones usados: Chat Trigger 1.3, AI Agent 2.2, DeepSeek Chat Model 1, Code 2, HTTP Request 4.2 e IF 2.2. La definición fuente del modelo expone `model` y `options.responseFormat`; se eligió `json_object`. El nombre del tipo es `@n8n/n8n-nodes-langchain.lmChatDeepSeek`. Confirma en tu instancia que esos nodos estén disponibles y que el selector acepte `deepseek-flash`; una instancia anterior puede necesitar actualizar n8n o ajustar su export desde el editor.
+El workspace no trae instalación ni versión local de n8n, así que no se puede certificar la importación contra la versión del estudiante. Para preparar el export se revisaron fuentes oficiales de n8n que muestran los tipos y versiones usados: Chat Trigger 1.3, AI Agent 2.2, DeepSeek Chat Model 1, Code 2, HTTP Request 4.2 e IF 2.2. El nodo `Evaluar pedido` está configurado en modo **Run Once for Each Item** y su campo `jsCode` es una copia exacta de `nodo-code.js`. La definición fuente del modelo expone `model` y `options.responseFormat`; se eligió `json_object`. El nombre del tipo es `@n8n/n8n-nodes-langchain.lmChatDeepSeek`. Confirma en tu instancia que esos nodos estén disponibles y que el selector acepte `deepseek-flash`; una instancia anterior puede necesitar actualizar n8n o ajustar su export desde el editor.
 
 Fuentes de referencia consultadas:
 
