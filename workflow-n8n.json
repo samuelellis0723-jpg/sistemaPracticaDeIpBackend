@@ -1,0 +1,466 @@
+{
+  "name": "Laboratorio 1 - Verificaci?n geogr?fica de pedidos",
+  "nodes": [
+    {
+      "parameters": {
+        "public": false,
+        "mode": "hostedChat",
+        "options": {
+          "responseMode": "lastNode",
+          "title": "Verificaci?n de pedidos",
+          "subtitle": "Env?o seg?n cobertura geogr?fica",
+          "inputPlaceholder": "Describe tu pedido con id, cliente, IP y art?culos."
+        }
+      },
+      "id": "7e987bed-f312-4ed1-9668-169b8fb11ce3",
+      "name": "Chat Trigger",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "Lee el mensaje del usuario. Si el usuario solo da una direccion IP o pide comprobar cobertura sin dar datos suficientes de un pedido, responde con modo \"consulta_cobertura\" y formato {\"modo\":\"consulta_cobertura\",\"pedido\":{\"ip\":\"IP indicada\"},\"errores\":[]}. No inventes ID, cliente ni articulos. Si el usuario solicita procesar un pedido y proporciona sus datos, responde con modo \"pedido\" y formato {\"modo\":\"pedido\",\"pedido\":{\"id\":null,\"cliente\":null,\"ip\":null,\"items\":[]},\"errores\":[]}. Incluye solo campos proporcionados; campos ausentes null o ausentes y errores con campos faltantes. Cada articulo conserva sus campos disponibles. Responde solo JSON valido, sin Markdown. No consultes APIs, no calcules costos ni decidas cobertura."
+        }
+      },
+      "id": "fa4c0f0e-1967-4cf9-9a58-6f7933bb3791",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": "deepseek-flash",
+        "options": {
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "e044a6da-8646-4021-abe4-236022b63b38",
+      "name": "DeepSeek Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        260,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Convierte la salida del agente en un pedido; no decide reglas del negocio.\nlet salida = $json.output ?? $json;\nlet objeto;\ntry {\n  objeto = typeof salida === 'string' ? JSON.parse(salida) : salida;\n  if (typeof objeto === 'string') objeto = JSON.parse(objeto);\n} catch (error) {\n  return [{ json: { pedido: null, ip: null, errores: ['La salida del agente no es JSON valido.'], errorAgente: true, detalleAgente: String(error.message || error) } }];\n}\nconst pedido = objeto && typeof objeto === 'object' && objeto.pedido && typeof objeto.pedido === 'object' && !Array.isArray(objeto.pedido) ? objeto.pedido : null;\nconst errores = objeto && Array.isArray(objeto.errores) ? objeto.errores : [];\nconst ip = pedido && typeof pedido.ip === 'string' && pedido.ip.trim() ? pedido.ip.trim() : null;\nreturn [{ json: { pedido, ip, errores, errorAgente: !pedido, detalleAgente: pedido ? '' : 'El JSON no contiene un objeto pedido valido.' } }];"
+      },
+      "id": "f1ed9b82-a9f5-429e-ae54-b55e17b7ef92",
+      "name": "Preparar pedido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5a74987f-57b9-4c44-8fbd-6f5246ac008c",
+              "leftValue": "={{ $json.ip !== null && String($json.ip).trim() !== \"\" }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f2b208f1-ba01-47db-a502-d165df36c58c",
+      "name": "?Hay IP?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'http://ip-api.com/json/' + encodeURIComponent($('Preparar pedido').first().json.ip) }}",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "status,message,country,countryCode,regionName,city,lat,lon,query"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json",
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "method": "GET"
+      },
+      "id": "e35ff7e4-e2db-4489-b336-a72b8508a91d",
+      "name": "IP-API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        120
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://ipinfo.io/' + encodeURIComponent($('Preparar pedido').first().json.ip) + '/json' }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json",
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        },
+        "method": "GET"
+      },
+      "id": "0678a361-6ca6-4b33-bd3e-55e56f77ceeb",
+      "name": "IPinfo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        480
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "class ErrorNegocio extends Error {\n  constructor(codigo, mensaje, detalleTecnico = '') {\n    super(mensaje);\n    this.name = 'ErrorNegocio';\n    this.codigo = codigo;\n    this.detalleTecnico = detalleTecnico;\n  }\n}\n\nclass Ubicacion {\n  constructor({ pais, codigoPais, region, ciudad, lat, lon, ip, fuente } = {}) {\n    Object.assign(this, { pais, codigoPais, region, ciudad, lat, lon, ip, fuente });\n  }\n  static desdeIpApi(r) { return normalizarFuenteGeografica(new FuenteIpApi(), r); }\n  static desdeIpInfo(r) { return normalizarFuenteGeografica(new FuenteIpInfo(), r); }\n  esValida() { return Boolean(typeof this.codigoPais === 'string' && this.codigoPais.trim() && typeof this.ip === 'string' && this.ip.trim()); }\n  esPaisSoportado() { return String(this.codigoPais || '').trim().toUpperCase() === 'CR'; }\n}\n\nclass FuenteGeografica {\n  normalizarRespuesta() {\n    throw new ErrorNegocio('GEO_FALLIDA', 'La fuente geográfica no implementa la normalización.', 'Debe usarse una clase concreta de geolocalizacion.');\n  }\n}\n\nclass FuenteIpApi extends FuenteGeografica {\n  normalizarRespuesta(r) {\n    if (!r || typeof r !== 'object' || Array.isArray(r)) throw new ErrorNegocio('GEO_FALLIDA', 'IP-API no devolvió una respuesta válida.', 'Respuesta ausente o con formato inválido.');\n    if (r.status !== 'success') {\n      const mensaje = String(r.message || 'respuesta sin mensaje');\n      const codigo = /private|reserved|bogon/i.test(mensaje) ? 'IP_PRIVADA_O_RESERVADA' : 'IP_INVALIDA';\n      throw new ErrorNegocio(codigo, 'No se pudo verificar la ubicación de la conexión.', `IP-API: ${mensaje}`);\n    }\n    const codigoPais = String(r.countryCode || '').trim();\n    const ip = String(r.query || '').trim();\n    if (!codigoPais || !ip || !r.country) throw new ErrorNegocio('GEO_FALLIDA', 'La respuesta de IP-API está incompleta.', `Campos obligatorios ausentes: ${[!r.country && 'country', !codigoPais && 'countryCode', !ip && 'query'].filter(Boolean).join(', ')}.`);\n    return new Ubicacion({ pais: String(r.country), codigoPais: codigoPais.toUpperCase(), region: r.regionName || '', ciudad: r.city || '', lat: r.lat ?? null, lon: r.lon ?? null, ip, fuente: 'ip-api' });\n  }\n}\n\nclass FuenteIpInfo extends FuenteGeografica {\n  normalizarRespuesta(r) {\n    if (!r || typeof r !== 'object' || Array.isArray(r)) throw new ErrorNegocio('GEO_FALLIDA', 'ipinfo no devolvió una respuesta válida.', 'Respuesta ausente o con formato inválido.');\n    if (r.status === 'fail') {\n      const mensaje = String(r.message || 'respuesta sin mensaje');\n      const codigo = /private|reserved|bogon/i.test(mensaje) ? 'IP_PRIVADA_O_RESERVADA' : 'IP_INVALIDA';\n      throw new ErrorNegocio(codigo, 'No se pudo verificar la ubicación de la conexión.', `ipinfo: ${mensaje}`);\n    }\n    if (r.bogon === true) throw new ErrorNegocio('IP_PRIVADA_O_RESERVADA', 'La IP es privada o está reservada.', `ipinfo: bogon=true para ${r.ip || 'IP desconocida'}.`);\n    if (r.error) {\n      const mensaje = String(r.error.message || r.error.title || 'respuesta de error');\n      const codigo = /private|reserved|bogon/i.test(mensaje) ? 'IP_PRIVADA_O_RESERVADA' : 'IP_INVALIDA';\n      throw new ErrorNegocio(codigo, 'No se pudo verificar la ubicación de la conexión.', `ipinfo: ${mensaje}`);\n    }\n    const codigoPais = String(r.country || '').trim();\n    const ip = String(r.ip || '').trim();\n    if (!codigoPais || !ip) throw new ErrorNegocio('GEO_FALLIDA', 'La respuesta de ipinfo está incompleta.', `Campos obligatorios ausentes: ${[!codigoPais && 'country', !ip && 'ip'].filter(Boolean).join(', ')}.`);\n    let lat = null, lon = null;\n    if (r.loc !== undefined && r.loc !== null && r.loc !== '') {\n      const partes = String(r.loc).split(',').map(x => Number(x.trim()));\n      if (partes.length !== 2 || !partes.every(Number.isFinite)) throw new ErrorNegocio('GEO_FALLIDA', 'Las coordenadas de ipinfo son inválidas.', `loc recibido: ${r.loc}`);\n      [lat, lon] = partes;\n    }\n    const codigoNormalizado = codigoPais.toUpperCase();\n    return new Ubicacion({ pais: codigoNormalizado === 'CR' ? 'Costa Rica' : codigoNormalizado, codigoPais: codigoNormalizado, region: r.region || '', ciudad: r.city || '', lat, lon, ip, fuente: 'ipinfo' });\n  }\n}\n\nfunction normalizarFuenteGeografica(fuente, respuesta) {\n  if (!(fuente instanceof FuenteGeografica)) throw new ErrorNegocio('GEO_FALLIDA', 'La fuente geográfica no es válida.', 'Se esperaba una instancia de FuenteGeografica.');\n  return fuente.normalizarRespuesta(respuesta);\n}\n\nclass Pedido {\n  constructor(datos = {}) {\n    datos = datos && typeof datos === 'object' ? datos : {};\n    this.id = datos.id; this.cliente = datos.cliente; this.ip = datos.ip;\n    this.items = Array.isArray(datos.items) ? datos.items : [];\n    this.estado = datos.estado || 'pendiente'; this.costoEnvio = datos.costoEnvio ?? null;\n    this.zona = datos.zona ?? null; this.motivoRechazo = datos.motivoRechazo ?? null;\n    this.codigoRechazo = datos.codigoRechazo ?? null;\n  }\n  calcularSubtotal() { return this.items.reduce((s, x) => s + Number(x.cantidad) * Number(x.precio), 0); }\n  calcularPesoTotal() { return this.items.reduce((s, x) => s + Number(x.pesoKg ?? 0) * Number(x.cantidad), 0); }\n  estaCompleto() {\n    return Boolean(this.id && typeof this.cliente === 'string' && this.cliente.trim() && typeof this.ip === 'string' && this.ip.trim() && this.items.length && this.items.every(x => x && Number.isFinite(Number(x.cantidad)) && Number(x.cantidad) > 0 && Number.isFinite(Number(x.precio)) && Number(x.precio) >= 0 && Number.isFinite(Number(x.pesoKg ?? 0)) && Number(x.pesoKg ?? 0) >= 0));\n  }\n  estaPendiente() { return String(this.estado).toLowerCase() === 'pendiente'; }\n  aprobar(costoEnvio, zona, total) {\n    if (!this.estaPendiente()) throw new ErrorNegocio('PEDIDO_YA_PROCESADO', 'Este pedido ya fue procesado.');\n    this.estado = 'aprobado'; this.costoEnvio = costoEnvio; this.zona = zona; this.total = total; this.motivoRechazo = null; this.codigoRechazo = null;\n  }\n  rechazar(codigo, mensaje) { this.estado = 'rechazado'; this.codigoRechazo = codigo; this.motivoRechazo = mensaje; this.costoEnvio = null; }\n  toJSON() { return { estado: this.estado, costoEnvio: this.costoEnvio, zona: this.zona, total: this.total ?? null, motivoRechazo: this.motivoRechazo, codigoRechazo: this.codigoRechazo }; }\n}\n\nclass PoliticaEnvio {\n  constructor(config) { this.config = config; }\n  normalizar(texto) { return String(texto || '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim().toLowerCase(); }\n  estaEnCobertura(ubicación) { return Boolean(ubicación && ubicación.esPaisSoportado() && this.obtenerZona(ubicación)); }\n  obtenerZona(ubicación) {\n    if (!ubicación || !ubicación.esPaisSoportado()) return null;\n    const region = this.normalizar(ubicación.region);\n    if (!region) return null;\n    for (const [zona, regiones] of Object.entries(this.config.regionesPorZona || {})) {\n      if (regiones.some(alias => { const a = this.normalizar(alias); return region === a || region.includes(a); })) return zona;\n    }\n    return null;\n  }\n  calcularCostoEnvio(pedido, zona) {\n    if (zona === 'GAM' && pedido.calcularSubtotal() >= this.config.envioGratisDesde) return 0;\n    const base = Number(this.config.tarifas[zona]);\n    if (!Number.isFinite(base)) throw new ErrorNegocio('FUERA_DE_COBERTURA', 'No tenemos cobertura para esta zona.');\n    return base + Math.max(0, Math.ceil(pedido.calcularPesoTotal() - Number(this.config.pesoIncluidoKg))) * Number(this.config.recargoPorKg);\n  }\n  salida(pedidoId, aprobado, estado, zona, costoEnvio, total, codigo, motivo, detalleTecnico, cuerpoPatch) {\n    return { pedidoId: pedidoId ?? null, aprobado, estado, zona: zona ?? null, costoEnvio: costoEnvio ?? null, total: total ?? null, codigo: codigo ?? null, motivo: motivo || '', detalleTecnico: detalleTecnico || '', cuerpoPatch };\n  }\n  evaluar(entrada, ubicaciónA, ubicaciónB) {\n    let pedido, pedidoId = entrada && typeof entrada === 'object' ? entrada.id ?? null : null;\n    try {\n      pedido = entrada instanceof Pedido ? entrada : new Pedido(entrada);\n      pedidoId = pedido.id ?? null;\n      if (!pedido.estaPendiente()) {\n        const codigo = 'PEDIDO_YA_PROCESADO', motivo = 'El pedido ya fue procesado.';\n        return this.salida(pedidoId, false, pedido.estado, pedido.zona, pedido.costoEnvio, null, codigo, motivo, `Estado recibido: ${pedido.estado}.`, { ultimoIntento: { codigo, motivo, fecha: new Date().toISOString() } });\n      }\n      if (!pedido.estaCompleto()) {\n        const codigo = 'DATOS_INCOMPLETOS', motivo = 'Faltan datos válidos para procesar el pedido.';\n        pedido.rechazar(codigo, motivo);\n        return this.salida(pedidoId, false, 'rechazado', null, null, null, codigo, motivo, 'Se requiere id, cliente, IP y artículos con cantidad, precio y peso válidos.', { estado: 'rechazado', motivoRechazo: motivo, codigoRechazo: codigo });\n      }\n      const válidar = (u, etiqueta) => {\n        if (u === null || u === undefined) return null;\n        if (u instanceof ErrorNegocio) throw u;\n        if (!(u instanceof Ubicacion) || !u.esValida()) throw new ErrorNegocio('GEO_FALLIDA', `${etiqueta} no contiene una ubicación válidada.`, 'Objeto de ubicación inválido o de tipo inesperado.');\n        return u;\n      };\n      let a = válidar(ubicaciónA, 'IP-API'), b = válidar(ubicaciónB, 'ipinfo');\n      if (!a && !b) throw new ErrorNegocio('GEO_FALLIDA', 'No fue posible verificar la ubicación. Intente de nuevo.', 'Ninguna fuente de geolocalización está disponible.');\n      if (a && b && a.codigoPais.toUpperCase() !== b.codigoPais.toUpperCase()) throw new ErrorNegocio('GEO_INCONSISTENTE', 'Las fuentes de ubicación no coinciden. No podemos válidar la cobertura.', `IP-API: ${a.codigoPais}; ipinfo: ${b.codigoPais}.`);\n      const normalizarIp = valor => String(valor || '').trim().toLowerCase();\n      if (a && b && normalizarIp(a.ip) !== normalizarIp(b.ip)) throw new ErrorNegocio('GEO_INCONSISTENTE', 'Las fuentes no devolvieron la misma IP consultada.', `IP-API: ${a.ip}; ipinfo: ${b.ip}.`);\n      const ipPedido = normalizarIp(pedido.ip);\n      if (a && normalizarIp(a.ip) !== ipPedido) {\n        if (b && normalizarIp(b.ip) === ipPedido) a = null;\n        else throw new ErrorNegocio('GEO_FALLIDA', 'La ubicación recibida no corresponde a la IP del pedido.', `IP del pedido: ${pedido.ip}; IP-API: ${a.ip}.`);\n      }\n      if (b && normalizarIp(b.ip) !== ipPedido) {\n        if (a && normalizarIp(a.ip) === ipPedido) b = null;\n        else throw new ErrorNegocio('GEO_FALLIDA', 'La ubicación recibida no corresponde a la IP del pedido.', `IP del pedido: ${pedido.ip}; ipinfo: ${b.ip}.`);\n      }\n      if (!a && !b) throw new ErrorNegocio('GEO_FALLIDA', 'No fue posible verificar la ubicación. Intente de nuevo.', 'Ninguna respuesta de geolocalización coincide con la IP del pedido.');\n      const elegida = a || b;\n      if (!elegida.esPaisSoportado()) throw new ErrorNegocio('FUERA_DE_COBERTURA', 'Por el momento solo entregamos en Costa Rica.', `País: ${elegida.pais} (${elegida.codigoPais}).`);\n      const fuenteZona = a && a.region ? a : b && b.region ? b : elegida;\n      const zona = this.obtenerZona(fuenteZona);\n      if (!zona) throw new ErrorNegocio('FUERA_DE_COBERTURA', 'No tenemos cobertura para esta región.', `Región: ${fuenteZona.region || '(sin región)'}.`);\n      const costoEnvio = this.calcularCostoEnvio(pedido, zona), total = pedido.calcularSubtotal() + costoEnvio;\n      pedido.aprobar(costoEnvio, zona, total);\n      return this.salida(pedidoId, true, 'aprobado', zona, costoEnvio, total, null, 'Pedido aprobado.', `País verificado por ${a && b ? 'ambas fuentes' : (a || b).fuente}; zona tomada de ${fuenteZona.fuente}.`, { estado: 'aprobado', zona, costoEnvio, total, motivoRechazo: null });\n    } catch (error) {\n      const codigo = error instanceof ErrorNegocio ? error.codigo : 'ERROR_INTERNO';\n      const motivo = error instanceof ErrorNegocio ? error.message : 'No pudimos procesar el pedido. Intente de nuevo.';\n      const detalle = error instanceof ErrorNegocio ? error.detalleTecnico : String(error && error.message || error);\n      const negocio = ['FUERA_DE_COBERTURA', 'GEO_INCONSISTENTE', 'IP_PRIVADA_O_RESERVADA', 'IP_INVALIDA', 'DATOS_INCOMPLETOS'].includes(codigo);\n      if (negocio) {\n        if (pedido instanceof Pedido && pedido.estaPendiente()) pedido.rechazar(codigo, motivo);\n        return this.salida(pedidoId, false, 'rechazado', null, null, null, codigo, motivo, detalle, { estado: 'rechazado', motivoRechazo: motivo, codigoRechazo: codigo });\n      }\n      const estado = pedido instanceof Pedido ? pedido.estado : null;\n      return this.salida(pedidoId, false, estado, pedido instanceof Pedido ? pedido.zona : null, pedido instanceof Pedido ? pedido.costoEnvio : null, null, codigo, motivo, detalle, { ultimoIntento: { codigo, motivo, fecha: new Date().toISOString() } });\n    }\n  }\n}\n\n// Adaptador n8n para el workflow con HTTP Request fuera del AI Agent.\n// Nombres confirmados en workflow-n8n.json: AI Agent y Merge geolocalizacion.\n// Configure este nodo en modo \"Run Once for Each Item\". No hace solicitudes HTTP.\nconst CONFIG_ENVIO = {\n  regionesPorZona: {\n    GAM: ['San José', 'San Jose', 'San José Province', 'San Jose Province', 'Provincia de San José', 'Provincia de San Jose', 'Heredia', 'Heredia Province', 'Provincia de Heredia', 'Alajuela', 'Alajuela Province', 'Provincia de Alajuela', 'Cartago', 'Cartago Province'],\n    RESTO_PAIS: ['Guanacaste', 'Guanacaste Province', 'Provincia de Guanacaste', 'Puntarenas', 'Puntarenas Province', 'Provincia de Puntarenas', 'Limón', 'Limon', 'Limon Province', 'Provincia de Limón', 'Provincia de Limon']\n  },\n  tarifas: { GAM: 2500, RESTO_PAIS: 4500 },\n  pesoIncluidoKg: 5,\n  recargoPorKg: 500,\n  envioGratisDesde: 50000\n};\n\nfunction leerNodo(nombre) {\n  try {\n    const items = $(nombre).all();\n    if (!Array.isArray(items) || !items.length || !items[0] || !items[0].json) return null;\n    return items[0].json;\n  } catch (_) {\n    return null;\n  }\n}\n\nfunction errorInterno(pedido, detalle) {\n  const objeto = pedido && typeof pedido === 'object' && !Array.isArray(pedido) ? pedido : null;\n  const pedidoId = objeto ? objeto.id ?? null : null;\n  const codigo = 'ERROR_INTERNO';\n  const motivo = 'No se pudo interpretar la salida del AI Agent. Revise los datos e intente de nuevo.';\n  const patch = { ultimoIntento: { codigo, motivo, fecha: new Date().toISOString() } };\n  const persistir = (typeof pedidoId === 'string' && pedidoId.trim() !== '') || (typeof pedidoId === 'number' && Number.isFinite(pedidoId));\n  return {\n    pedidoId,\n    aprobado: false,\n    estado: objeto ? objeto.estado ?? null : null,\n    zona: objeto ? objeto.zona ?? null : null,\n    costoEnvio: objeto ? objeto.costoEnvio ?? null : null,\n    total: null,\n    codigo,\n    motivo,\n    detalleTecnico: String(detalle || 'Salida del agente vacía o inválida.').slice(0, 500),\n    cuerpoPatch: patch,\n    persistir\n  };\n}\n\nfunction leerPedidoAgente(salida) {\n  if (!salida || typeof salida !== 'object' || Array.isArray(salida)) throw new Error('El nodo AI Agent no entregó un objeto de salida.');\n  let bruto = Object.prototype.hasOwnProperty.call(salida, 'output') ? salida.output : salida;\n  if (typeof bruto === 'string') {\n    if (!bruto.trim()) throw new Error('La salida del agente está vacía.');\n    bruto = JSON.parse(bruto);\n  }\n  if (!bruto || typeof bruto !== 'object' || Array.isArray(bruto)) throw new Error('La salida del agente debe ser un objeto JSON.');\n  if (!bruto.pedido || typeof bruto.pedido !== 'object' || Array.isArray(bruto.pedido)) throw new Error('Falta el objeto pedido en la salida del agente.');\n  const errores = Array.isArray(bruto.errores) ? bruto.errores : [];\n  const modo = bruto.modo === 'consulta_cobertura' ? 'consulta_cobertura' : 'pedido';\n  return { pedido: bruto.pedido, errores, modo };\n}\n\nfunction leerUbicacion(respuesta, lector, nombreFuente, fallos) {\n  if (respuesta === null || respuesta === undefined) {\n    fallos.push(nombreFuente + ': sin respuesta disponible.');\n    return null;\n  }\n  if (typeof respuesta !== 'object' || Array.isArray(respuesta)) {\n    fallos.push(nombreFuente + ': respuesta con formato inválido.');\n    return null;\n  }\n\n  let cuerpo = respuesta;\n  const tieneEstadoHttp = Object.prototype.hasOwnProperty.call(respuesta, 'statusCode');\n  const errorRespuesta = respuesta.error;\n  const pareceErrorTransporte = errorRespuesta && (typeof errorRespuesta !== 'object' || !errorRespuesta.title);\n  if (errorRespuesta && !tieneEstadoHttp && !Object.prototype.hasOwnProperty.call(respuesta, 'body') && !('ip' in respuesta) && !('query' in respuesta) && !('country' in respuesta) && pareceErrorTransporte) {\n    fallos.push(nombreFuente + ': ' + String(errorRespuesta.message || errorRespuesta.description || errorRespuesta));\n    return null;\n  }\n  if (tieneEstadoHttp) {\n    const estadoHttp = Number(respuesta.statusCode);\n    if (!Number.isFinite(estadoHttp) || estadoHttp < 200 || estadoHttp >= 300) {\n      fallos.push(nombreFuente + ': HTTP ' + String(respuesta.statusCode) + (respuesta.error && respuesta.error.message ? ' (' + respuesta.error.message + ')' : '') + '.');\n      return null;\n    }\n    if (!Object.prototype.hasOwnProperty.call(respuesta, 'body')) {\n      fallos.push(nombreFuente + ': wrapper HTTP sin body.');\n      return null;\n    }\n    cuerpo = respuesta.body;\n  } else if (Object.prototype.hasOwnProperty.call(respuesta, 'body') && !('ip' in respuesta) && !('query' in respuesta)) {\n    cuerpo = respuesta.body;\n  }\n\n  if (typeof cuerpo === 'string') {\n    try { cuerpo = JSON.parse(cuerpo); }\n    catch (_) { fallos.push(nombreFuente + ': el body no contiene JSON válido.'); return null; }\n  }\n  if (!cuerpo || typeof cuerpo !== 'object' || Array.isArray(cuerpo)) {\n    fallos.push(nombreFuente + ': body ausente o con formato inválido.');\n    return null;\n  }\n\n  try {\n    return lector(cuerpo);\n  } catch (error) {\n    if (error instanceof ErrorNegocio && error.codigo === 'GEO_FALLIDA') {\n      fallos.push(nombreFuente + ': ' + error.detalleTecnico);\n      return null;\n    }\n    if (error instanceof ErrorNegocio) return error;\n    fallos.push(nombreFuente + ': error al interpretar la respuesta.');\n    return null;\n  }\n}\n\nlet resultado;\nlet pedidoParseado = null;\ntry {\n  const salidaAgente = leerNodo('AI Agent');\n  if (!salidaAgente) throw new Error('No fue posible leer la salida del nodo AI Agent.');\n  const datosAgente = leerPedidoAgente(salidaAgente);\n  pedidoParseado = datosAgente.pedido;\n  const esConsultaCobertura = datosAgente.modo === 'consulta_cobertura';\n  const fallos = [];\n\n  // Merge combina por posicion dos objetos etiquetados para evitar pisar campos de ambas APIs.\n  const datosFusionados = typeof $json === 'object' && $json !== null && !Array.isArray($json) ? $json : {};\n  const respuestaIpApi = datosFusionados.geo_ipapi ?? null;\n  const respuestaIpInfo = datosFusionados.geo_ipinfo ?? null;\n  const fuenteIpApi = new FuenteIpApi();\n  const fuenteIpInfo = new FuenteIpInfo();\n  const ubicacionA = leerUbicacion(respuestaIpApi, r => normalizarFuenteGeografica(fuenteIpApi, r), 'IP-API', fallos);\n  const ubicacionB = leerUbicacion(respuestaIpInfo, r => normalizarFuenteGeografica(fuenteIpInfo, r), 'IPinfo', fallos);\n\n  const politica = new PoliticaEnvio(CONFIG_ENVIO);\n  if (esConsultaCobertura && !(typeof datosAgente.pedido.ip === 'string' && datosAgente.pedido.ip.trim())) {\n    resultado = {\n      pedidoId: null, aprobado: false, estado: 'consulta_cobertura', zona: null,\n      costoEnvio: null, total: null, codigo: 'DATOS_INCOMPLETOS',\n      motivo: 'Escribe una direccion IP para consultar la cobertura.',\n      detalleTecnico: 'La consulta de cobertura requiere una IP textual.',\n      cuerpoPatch: null, persistir: false, tipoResultado: 'consulta_cobertura'\n    };\n  } else {\n    const pedidoEvaluado = esConsultaCobertura ? {\n      id: '__consulta_cobertura__', cliente: 'Consulta de cobertura', ip: datosAgente.pedido.ip,\n      items: [{ cantidad: 1, precio: 0, pesoKg: 0 }]\n    } : datosAgente.pedido;\n    resultado = politica.evaluar(pedidoEvaluado, ubicacionA, ubicacionB);\n    if (esConsultaCobertura) {\n      const decisionCobertura = resultado;\n      const ipConsultada = datosAgente.pedido.ip.trim();\n      const fuenteUbicacion = ubicacionA instanceof Ubicacion\n        ? ubicacionA\n        : ubicacionB instanceof Ubicacion ? ubicacionB : null;\n      const fuenteRegion = ubicacionA instanceof Ubicacion && ubicacionA.region\n        ? ubicacionA\n        : ubicacionB instanceof Ubicacion && ubicacionB.region ? ubicacionB : fuenteUbicacion;\n      const ubicacionConsulta = fuenteUbicacion ? {\n        ip: ipConsultada,\n        ciudad: (ubicacionA instanceof Ubicacion && ubicacionA.ciudad) || (ubicacionB instanceof Ubicacion && ubicacionB.ciudad) || null,\n        region: fuenteRegion && fuenteRegion.region || null,\n        pais: (ubicacionA instanceof Ubicacion && ubicacionA.pais) || (ubicacionB instanceof Ubicacion && ubicacionB.pais) || null,\n        codigoPais: (ubicacionA instanceof Ubicacion && ubicacionA.codigoPais) || (ubicacionB instanceof Ubicacion && ubicacionB.codigoPais) || null,\n        lat: (ubicacionA instanceof Ubicacion && ubicacionA.lat !== null ? ubicacionA.lat : null) ?? (ubicacionB instanceof Ubicacion ? ubicacionB.lat : null),\n        lon: (ubicacionA instanceof Ubicacion && ubicacionA.lon !== null ? ubicacionA.lon : null) ?? (ubicacionB instanceof Ubicacion ? ubicacionB.lon : null),\n        fuente: ubicacionA instanceof Ubicacion && ubicacionB instanceof Ubicacion ? 'ip-api e ipinfo' : fuenteUbicacion.fuente\n      } : null;\n      const motivoCobertura = decisionCobertura.aprobado\n        ? 'La IP ' + ipConsultada + ' esta dentro de la zona de entrega ' + decisionCobertura.zona + '.'\n        : decisionCobertura.codigo === 'FUERA_DE_COBERTURA'\n          ? 'La IP ' + ipConsultada + ' esta fuera de la zona de entrega.'\n          : 'No se pudo confirmar la cobertura de la IP ' + ipConsultada + ': ' + decisionCobertura.motivo;\n      resultado = {\n        pedidoId: null, aprobado: decisionCobertura.aprobado, estado: 'consulta_cobertura',\n        zona: decisionCobertura.zona, costoEnvio: null, total: null,\n        codigo: decisionCobertura.aprobado ? 'COBERTURA_DISPONIBLE' : decisionCobertura.codigo,\n        motivo: motivoCobertura, detalleTecnico: decisionCobertura.detalleTecnico,\n        ubicacion: ubicacionConsulta, cuerpoPatch: null, persistir: false, tipoResultado: 'consulta_cobertura'\n      };\n    }\n  }\n  if (datosAgente.errores.length && !resultado.aprobado) {\n    const resumen = datosAgente.errores.map(e => typeof e === 'string' ? e : e && (e.mensaje || e.message || e.codigo) || 'error de extracción').join('; ').slice(0, 500);\n    fallos.push('AI Agent: ' + resumen);\n  }\n  if (!ubicacionA && !ubicacionB && fallos.length) {\n    resultado.detalleTecnico = [resultado.detalleTecnico, fallos.join(' ')].filter(Boolean).join(' ').slice(0, 1000);\n  }\n} catch (error) {\n  resultado = errorInterno(pedidoParseado, error && error.message ? error.message : 'Error de entrada inesperado.');\n}\n\nconst idValido = (typeof resultado.pedidoId === 'string' && resultado.pedidoId.trim() !== '') || (typeof resultado.pedidoId === 'number' && Number.isFinite(resultado.pedidoId));\nresultado.persistir = idValido && Boolean(resultado.cuerpoPatch && typeof resultado.cuerpoPatch === 'object' && !Array.isArray(resultado.cuerpoPatch));\nreturn { json: resultado };"
+      },
+      "id": "c0c4490c-7d6f-4fe9-87b0-063ee263f133",
+      "name": "Evaluar pedido",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "9751e9fa-2d11-489e-9e51-44f0602d06c4",
+              "leftValue": "={{ $json.persistir === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "1b7eaa7d-8f9d-4abf-88b9-451f94fc4d6a",
+      "name": "?Se puede persistir?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ 'http://localhost:3000/pedidos/' + encodeURIComponent(String($json.pedidoId)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.cuerpoPatch }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json",
+              "neverError": true,
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "d1245247-e228-45b2-850d-bf08344185eb",
+      "name": "PATCH JSON Server",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2240,
+        180
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const decision = $('Evaluar pedido').first().json;\nif (decision.tipoResultado === 'consulta_cobertura') {\n  const texto = decision.aprobado\n    ? 'SI, esta dentro de la zona de entrega.'\n    : decision.codigo === 'FUERA_DE_COBERTURA'\n      ? 'NO, esta fuera de la zona de entrega.'\n      : 'No se pudo confirmar si esta dentro de la zona de entrega.';\n  const ubicacion = decision.ubicacion;\n  const detalleUbicacion = ubicacion\n    ? '\\nUbicacion estimada por IP:' +\n      '\\nCiudad: ' + (ubicacion.ciudad || 'No disponible') +\n      '\\nRegion/estado: ' + (ubicacion.region || 'No disponible') +\n      '\\nPais: ' + (ubicacion.pais || 'No disponible') + (ubicacion.codigoPais ? ' (' + ubicacion.codigoPais + ')' : '') +\n      '\\nCoordenadas: ' + (ubicacion.lat ?? 'No disponibles') + ', ' + (ubicacion.lon ?? 'No disponibles') +\n      '\\nIP: ' + (ubicacion.ip || 'No disponible') +\n      '\\nFuente: ' + (ubicacion.fuente || 'No disponible')\n    : '\\nUbicacion: No disponible; las APIs no devolvieron datos geograficos validos.';\n  return [{ json: { ...decision, output: texto + '\\nZona de entrega: ' + (decision.zona || 'No determinada') + detalleUbicacion + '\\nMotivo: ' + (decision.motivo || 'Sin detalle') } }];\n}\nlet parche;\ntry { parche = $('PATCH JSON Server').first().json; } catch (error) { parche = null; }\nconst salida = { ...decision, persistido: false };\nif (!((typeof decision.pedidoId === 'string' && decision.pedidoId.trim() !== '') || (typeof decision.pedidoId === 'number' && Number.isFinite(decision.pedidoId)))) {\n  salida.detalleTecnico = [salida.detalleTecnico, 'No se intento PATCH porque el pedido no tiene un ID valido.'].filter(Boolean).join(' ');\n} else if (!parche) {\n  salida.detalleTecnico = [salida.detalleTecnico, 'No se recibio confirmacion del PATCH.'].filter(Boolean).join(' ');\n} else {\n  const estadoHttp = Number(parche.statusCode ?? parche.error?.statusCode);\n  if (estadoHttp === 404) {\n    salida.aprobado = false;\n    salida.codigo = 'PEDIDO_NO_ENCONTRADO';\n    salida.motivo = 'No se encontro el pedido en JSON Server.';\n    salida.detalleTecnico = 'JSON Server respondio HTTP 404; el pedido no fue actualizado.';\n  } else if (parche.error || !Number.isFinite(estadoHttp) || estadoHttp < 200 || estadoHttp >= 300) {\n    salida.codigo = 'ERROR_INTERNO';\n    salida.motivo = 'No fue posible confirmar la actualizacion del pedido.';\n    salida.detalleTecnico = String(parche.error?.message || 'PATCH sin respuesta HTTP satisfactoria; revise JSON Server.');\n  } else {\n    salida.persistido = true;\n  }\n}\nconst estadoTexto = salida.persistido ? (salida.aprobado ? 'APROBADO Y GUARDADO' : salida.codigo === 'PEDIDO_YA_PROCESADO' ? 'YA PROCESADO; intento registrado' : 'RECHAZADO Y GUARDADO') : salida.codigo === 'PEDIDO_NO_ENCONTRADO' ? 'PEDIDO NO ENCONTRADO' : 'RESULTADO NO GUARDADO';\nsalida.output = estadoTexto + '\\nZona: ' + (salida.zona || 'No determinada') + '\\nCosto de envio: ' + (salida.costoEnvio ?? 'No determinado') + ' CRC\\nTotal: ' + (salida.total ?? 'No determinado') + ' CRC\\nMotivo: ' + (salida.motivo || 'Sin rechazo');\nreturn [{ json: salida }];"
+      },
+      "id": "6e178e61-860f-4f82-9e3e-cf5a8bf4f5d6",
+      "name": "Respuesta final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { geo_ipapi: $json } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        120
+      ],
+      "id": "1847c532-43ad-4569-8183-4f494cbf89ae",
+      "name": "Etiquetar IP-API"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return { json: { geo_ipinfo: $json } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        480
+      ],
+      "id": "244f3f5f-4c09-4b6b-9d18-1b27bc5f9e59",
+      "name": "Etiquetar IPinfo"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1500,
+        300
+      ],
+      "id": "adfe818a-cb38-484f-900e-05f223868831",
+      "name": "Merge geolocalizacion"
+    }
+  ],
+  "connections": {
+    "Chat Trigger": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Preparar pedido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar pedido": {
+      "main": [
+        [
+          {
+            "node": "?Hay IP?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "?Hay IP?": {
+      "main": [
+        [
+          {
+            "node": "IP-API",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IPinfo",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Evaluar pedido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IP-API": {
+      "main": [
+        [
+          {
+            "node": "Etiquetar IP-API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IPinfo": {
+      "main": [
+        [
+          {
+            "node": "Etiquetar IPinfo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar pedido": {
+      "main": [
+        [
+          {
+            "node": "?Se puede persistir?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "?Se puede persistir?": {
+      "main": [
+        [
+          {
+            "node": "PATCH JSON Server",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respuesta final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PATCH JSON Server": {
+      "main": [
+        [
+          {
+            "node": "Respuesta final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Etiquetar IP-API": {
+      "main": [
+        [
+          {
+            "node": "Merge geolocalizacion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Etiquetar IPinfo": {
+      "main": [
+        [
+          {
+            "node": "Merge geolocalizacion",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge geolocalizacion": {
+      "main": [
+        [
+          {
+            "node": "Evaluar pedido",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "84725a09-2062-4cc9-a3d7-9c50533a0be9",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
